@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.0//EN" "http://www.w3.org/TR/2001/PR-SVG-20010719/DTD/svg10.dtd">
+<svg width="6cm" height="4cm" viewBox="487 174 113 69" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <defs/>
+  <g id="Background">
+    <rect style="fill: #ffffff; fill-opacity: 1; stroke-opacity: 1; stroke-width: 0.705556; stroke: #000000" x="488.125" y="175.136" width="91.375" height="67.4629" rx="0" ry="0"/>
+    <text font-size="6.77333" style="fill: #000000; fill-opacity: 1; stroke: none;text-anchor:start;font-family:sans-serif;font-style:normal;font-weight:normal" x="595.75" y="210.587">
+      <tspan x="595.75" y="210.587">o</tspan>
+    </text>
+    <text font-size="12.7998" style="fill: #000000; fill-opacity: 1; stroke: none;text-anchor:start;font-family:sans-serif;font-style:normal;font-weight:normal" x="530.25" y="201.849">
+      <tspan x="530.25" y="201.849"></tspan>
+    </text>
+    <g>
+      <rect style="fill: #ffffff; fill-opacity: 1; stroke-opacity: 1; stroke-width: 0.4; stroke: #000000" x="519.25" y="184.474" width="29.125" height="12.8667" rx="0" ry="0"/>
+      <text font-size="6.77323" style="fill: #000000; fill-opacity: 1; stroke: none;text-anchor:middle;font-family:sans-serif;font-style:normal;font-weight:normal" x="533.812" y="192.961">
+        <tspan x="533.812" y="192.961">inner</tspan>
+      </text>
+    </g>
+    <g>
+      <rect style="fill: #ffffff; fill-opacity: 1; stroke-opacity: 1; stroke-width: 0.4; stroke: #000000" x="519.25" y="202.537" width="29.125" height="12.8667" rx="0" ry="0"/>
+      <text font-size="6.77323" style="fill: #000000; fill-opacity: 1; stroke: none;text-anchor:middle;font-family:sans-serif;font-style:normal;font-weight:normal" x="533.812" y="211.024">
+        <tspan x="533.812" y="211.024">inner</tspan>
+      </text>
+    </g>
+    <text font-size="6.77323" style="fill: #000000; fill-opacity: 1; stroke: none;text-anchor:start;font-family:sans-serif;font-style:normal;font-weight:normal" x="530.587" y="227.099">
+      <tspan x="530.587" y="227.099">...</tspan>
+    </text>
+    <g>
+      <polyline style="fill: none; stroke-opacity: 1; stroke-width: 0.8; stroke: #000000" points="548.359,227.099 566.484,227.099 566.484,209.224 590.839,209.224 "/>
+      <polygon style="fill: #000000; fill-opacity: 1; stroke-opacity: 1; stroke-width: 0.8; stroke: #000000" fill-rule="evenodd" points="593.839,209.224 589.839,211.224 590.839,209.224 589.839,207.224 "/>
+    </g>
+    <g>
+      <polyline style="fill: none; stroke-opacity: 1; stroke-width: 0.8; stroke: #000000" points="548.576,190.907 566.359,190.907 566.359,209.099 590.589,209.099 "/>
+      <polygon style="fill: #000000; fill-opacity: 1; stroke-opacity: 1; stroke-width: 0.8; stroke: #000000" fill-rule="evenodd" points="593.589,209.099 589.589,211.099 590.589,209.099 589.589,207.099 "/>
+    </g>
+    <g>
+      <line style="fill: none; stroke-opacity: 1; stroke-width: 0.8; stroke: #000000" x1="548.535" y1="208.941" x2="590.464" y2="208.857"/>
+      <polygon style="fill: #000000; fill-opacity: 1; stroke-opacity: 1; stroke-width: 0.8; stroke: #000000" fill-rule="evenodd" points="593.464,208.851 589.468,210.859 590.464,208.857 589.46,206.859 "/>
+    </g>
+  </g>
+</svg>
