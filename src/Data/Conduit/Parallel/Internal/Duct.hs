@@ -56,9 +56,9 @@ module Data.Conduit.Parallel.Internal.Duct(
     import           Control.Concurrent.STM
     import qualified Control.Exception      as Ex
     import           Control.Monad.State
-    import           GHC.Generics           (Generic)
     import           Data.List.NonEmpty     (NonEmpty (..))
     import qualified Data.List.NonEmpty     as NE
+    import           GHC.Generics           (Generic)
 
     -- **********************************************************************
     -- **                                                                  **
@@ -211,7 +211,17 @@ module Data.Conduit.Parallel.Internal.Duct(
         | Closing       -- ^ The Duct has been closed.
 
     -- | A thread blocking waiting for it's turn.
-    type Waiter = TVar WaiterStatus
+    newtype Waiter = Waiter {
+        waiterTVar :: TVar WaiterStatus
+    } deriving (Eq)
+
+    {-
+    For debugging, we may want:
+    data Waiter = Waiter {
+        waiterTVar :: TVar WaiterStatus,
+        waiterThreadId :: ThreadId
+    } deriving (Eq)
+    -}
 
     -- | The current state of a Duct.
     --
@@ -237,7 +247,7 @@ module Data.Conduit.Parallel.Internal.Duct(
     -- plus the fact that we're unlikely to add new operations to eliminate
     -- a bunch of code duplication.
     --
-    data Op = Read | Write 
+    data Op = Read | Write deriving (Show)
 
     type StatusM a x = StateT (Bool, Status a) STM x
 
@@ -268,7 +278,7 @@ module Data.Conduit.Parallel.Internal.Duct(
         tvar <- newTVarIO Nothing
         pure (ReadDuct tvar, WriteDuct tvar)
 
-    closeDuct :: forall a . TVar (Maybe (Status a)) -> IO (Maybe a)
+    closeDuct :: forall a .  TVar (Maybe (Status a)) -> IO (Maybe a)
     closeDuct tvar = join . atomically $ go
         where
             go :: STM (IO (Maybe a))
@@ -292,7 +302,8 @@ module Data.Conduit.Parallel.Internal.Duct(
                 closeWaiter y
 
             closeWaiter :: Waiter -> IO ()
-            closeWaiter waiter = atomically $ writeTVar waiter Closing
+            closeWaiter waiter =
+                atomically $ writeTVar (waiterTVar waiter) Closing
 
     closeReadDuct :: forall a . ReadDuct a -> IO (Maybe a)
     closeReadDuct = closeDuct . getReadTVar
@@ -301,7 +312,7 @@ module Data.Conduit.Parallel.Internal.Duct(
     closeWriteDuct = closeDuct . getWriteTVar
 
     
-    modifyDuct :: forall a b .
+    modifyDuct :: forall a b . 
                     Op
                     -> (Maybe a -> Maybe (Maybe a, b))
                     -> TVar (Maybe (Status a))
@@ -310,8 +321,14 @@ module Data.Conduit.Parallel.Internal.Duct(
             -- The waiter starts life as abandoned, and we set it to
             -- waiting when we add it to the queue.  This way, the
             -- cleanup doesn't do unnecessary work.
-            Ex.bracketOnError (newTVarIO Abandoned) cleanUp go
+            Ex.bracketOnError makeWaiter cleanUp go
         where
+            makeWaiter :: IO Waiter
+            makeWaiter =
+                Waiter
+                    <$> newTVarIO Abandoned
+                    -- <*> myThreadId
+
             withStatus :: forall x . StatusM a x -> STM (Maybe x)
             withStatus act = do
                 ms :: Maybe (Status a) <- readTVar tvar
@@ -364,7 +381,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                         -- If we don't have a value in the current, we need
                         -- to block
                         Nothing -> do
-                            lift $ writeTVar waiter Waiting
+                            lift $ writeTVar (waiterTVar waiter) Waiting
                             setQueue op (enqueue q waiter)
                             pure Nothing
                         -- If we got a value, wake up the other side
@@ -374,12 +391,13 @@ module Data.Conduit.Parallel.Internal.Duct(
                             pure (Just b)
                 else do
                     -- Other people are in queue, add ourselves
+                    lift $ writeTVar (waiterTVar waiter) Waiting
                     setQueue op (enqueue q waiter)
                     pure Nothing
 
             block :: Waiter -> STM (Maybe (Maybe b))
             block waiter = do
-                r <- readTVar waiter
+                r <- readTVar (waiterTVar waiter)
                 case r of
                     Waiting   -> retry        -- block
                     Abandoned -> pure Nothing -- This should not be possible.
@@ -388,7 +406,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                         -- Mark our waiter as abandoned- this is important to
                         -- prevent the cleanup routine from doing unnecessary
                         -- work if this transaction commits.
-                        writeTVar waiter Abandoned
+                        writeTVar (waiterTVar waiter) Abandoned
                         withStatus $ afterBlocking waiter
 
             afterBlocking :: Waiter -> StatusM a (Maybe b)
@@ -416,8 +434,8 @@ module Data.Conduit.Parallel.Internal.Duct(
             cleanUp :: Waiter -> IO ()
             cleanUp waiter = do
                 s <- atomically $ do
-                        s <- readTVar waiter
-                        writeTVar waiter Abandoned
+                        s <- readTVar (waiterTVar waiter)
+                        writeTVar (waiterTVar waiter) Abandoned
                         pure s
                 case s of
                     Waiting   -> pure ()
@@ -442,10 +460,10 @@ module Data.Conduit.Parallel.Internal.Duct(
                 case qhead q of
                     Nothing     -> pure ()
                     Just waiter -> do
-                        s <- lift $ readTVar waiter
+                        s <- lift $ readTVar (waiterTVar waiter)
                         case s of
                             Waiting   -> do
-                                lift $ writeTVar waiter Awoken
+                                lift $ writeTVar (waiterTVar waiter) Awoken
                                 pure ()
                             Awoken    -> pure ()
                             Abandoned -> do
@@ -524,4 +542,13 @@ module Data.Conduit.Parallel.Internal.Duct(
     qtail (QFull (_ :| []) (x  :| []))        = QSingle x
     qtail (QFull (_ :| []) (x1 :| (x2 : xs))) = QFull (x1 :| []) (x2 :| xs)
     qtail (QFull (_ :| (x : xs)) ts)          = QFull (x :| xs) ts
+
+    -- Needed for debugging.
+    {-
+    qelems :: Queue a -> [ a ]
+    qelems QEmpty = []
+    qelems (QSingle x) = [ x ]
+    qelems (QFull (x :| xs) (y :| ys)) = x : (xs ++ reverse ys ++ [y])
+    -}
+
 

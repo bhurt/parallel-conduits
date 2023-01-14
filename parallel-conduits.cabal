@@ -60,10 +60,12 @@ test-suite parallel-haskell-testsuite
     other-modules:      DuctTest
     hs-source-dirs:     test
     build-depends:      base >= 4.7 && < 5
+                        , async
                         -- , conduit
                         -- , deepseq
-                        -- , HUnit
-                        -- , parallel-conduits
+                        , HUnit
+                        , kan-extensions
+                        , parallel-conduits
                         -- , profunctors
                         -- , random
                         -- , these
