@@ -23,8 +23,41 @@ module DuctTest(
                     testReadBlock,
                     testWriteBlock,
                     testRead2,
-                    testWrite2
+                    testWrite2,
+                    testRead3,
+                    testWrite3
                 ]
+
+    spawnTest :: IO Bool -> M (Async Bool)
+    spawnTest act = Codensity go
+        where
+            go :: forall b . (Async Bool -> IO b) -> IO b
+            go cont = do
+                withAsync act $ \asy -> do
+                    link asy
+                    b <- cont asy
+                    r <- wait asy
+                    assert r
+                    pure b
+
+    pause :: M ()
+    pause = liftIO $ threadDelay 500
+
+    runTest :: String -> M () -> Test
+    runTest label act = TestLabel label $ TestCase $ runCodensity act pure
+
+    testRead :: ReadDuct Int -> Maybe Int -> IO Bool
+    testRead rd val = do
+        val1 :: Maybe a <- readDuct rd
+        if (val1 /= val)
+        then putStrLn $ "Expected " ++ show val ++ " but got " ++ show val1
+        else pure ()
+        pure $ val1 == val
+
+    testWrite :: WriteDuct Int -> Int -> Open -> IO Bool
+    testWrite wd val op = do
+        op2 :: Open <- writeDuct wd val
+        pure $ op == op2
 
     testRead1 :: Test
     testRead1 = runTest "testRead1" $ do
@@ -102,31 +135,39 @@ module DuctTest(
                     _ <- spawnTest $ testRead rd (Just 3)
                     pure ()
 
-    spawnTest :: IO Bool -> M (Async Bool)
-    spawnTest act = Codensity go
-        where
-            go :: forall b . (Async Bool -> IO b) -> IO b
-            go cont = do
-                withAsync act $ \asy -> do
-                    link asy
-                    b <- cont asy
-                    r <- wait asy
-                    assert r
-                    pure b
+    testRead3 :: Test
+    testRead3 = runTest "testRead2" $ do
+                    -- Three reads get filled in order
+                    (rd, wd) <- liftIO $ newDuct
+                    _ <- spawnTest $ testRead rd (Just 1)
+                    pause
+                    _ <- spawnTest $ testRead rd (Just 2)
+                    pause
+                    _ <- spawnTest $ testRead rd (Just 3)
+                    pause
+                    _ <- spawnTest $ testWrite wd 1 Open
+                    pause
+                    _ <- spawnTest $ testWrite wd 2 Open
+                    pause
+                    _ <- spawnTest $ testWrite wd 3 Open
+                    pure ()
 
-    pause :: M ()
-    pause = liftIO $ threadDelay 500
-
-    runTest :: String -> M () -> Test
-    runTest label act = TestLabel label $ TestCase $ runCodensity act pure
-
-    testRead :: ReadDuct Int -> Maybe Int -> IO Bool
-    testRead rd val = do
-        val1 :: Maybe a <- readDuct rd
-        pure $ val1 == val
-
-    testWrite :: WriteDuct Int -> Int -> Open -> IO Bool
-    testWrite wd val op = do
-        op2 :: Open <- writeDuct wd val
-        pure $ op == op2
+    testWrite3 :: Test
+    testWrite3 = runTest "testWrite2" $ do
+                    -- Three writes get filled in order
+                    (rd, wd) <- liftIO $ newFullDuct 1
+                    _ <- spawnTest $ testWrite wd 2 Open
+                    pause
+                    _ <- spawnTest $ testWrite wd 3 Open
+                    pause
+                    _ <- spawnTest $ testWrite wd 4 Open
+                    pause
+                    _ <- spawnTest $ testRead rd (Just 1)
+                    pause
+                    _ <- spawnTest $ testRead rd (Just 2)
+                    pause
+                    _ <- spawnTest $ testRead rd (Just 3)
+                    pause
+                    _ <- spawnTest $ testRead rd (Just 4)
+                    pure ()
 

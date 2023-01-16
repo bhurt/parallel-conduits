@@ -539,8 +539,10 @@ module Data.Conduit.Parallel.Internal.Duct(
     qtail :: Queue a -> Queue a
     qtail QEmpty                              = QEmpty
     qtail (QSingle _)                         = QEmpty
-    qtail (QFull (_ :| []) (x  :| []))        = QSingle x
-    qtail (QFull (_ :| []) (x1 :| (x2 : xs))) = QFull (x1 :| []) (x2 :| xs)
+    qtail (QFull (_ :| []) (x  :| xs))        =
+        case reverse xs of
+            []     -> QSingle x
+            (y:ys) -> QFull (y :| ys) (x :| [])
     qtail (QFull (_ :| (x : xs)) ts)          = QFull (x :| xs) ts
 
     -- Needed for debugging.
