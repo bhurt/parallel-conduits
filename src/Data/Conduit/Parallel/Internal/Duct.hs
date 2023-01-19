@@ -247,9 +247,9 @@ module Data.Conduit.Parallel.Internal.Duct(
     -- plus the fact that we're unlikely to add new operations to eliminate
     -- a bunch of code duplication.
     --
-    data Op = Read | Write deriving (Show)
+    data Op = Read | Write
 
-    type StatusM a x = StateT (Bool, Status a) STM x
+    type StatusM a x = StateT (Status a) STM x
 
     newDuct :: forall a . IO (ReadDuct a, WriteDuct a)
     newDuct = do
@@ -335,10 +335,8 @@ module Data.Conduit.Parallel.Internal.Duct(
                 case ms of
                     Nothing    -> pure Nothing
                     Just st -> do
-                        (x, (b, s)) <- runStateT act (False, st)
-                        if b
-                        then writeTVar tvar (Just s)
-                        else pure ()
+                        (x, s) <- runStateT act st
+                        writeTVar tvar (Just s)
                         pure $ Just x
 
             go :: Waiter -> IO (Maybe b)
@@ -500,29 +498,29 @@ module Data.Conduit.Parallel.Internal.Duct(
  
             getQueue :: Op -> StatusM a (Queue Waiter)
             getQueue op1 = do
-                (_, s) <- get
+                s <- get
                 pure $ case op1 of
                             Read  -> readers s
                             Write -> writers s
 
             setQueue :: Op -> Queue Waiter -> StatusM a ()
             setQueue op1 q = do
-                (_, s) <- get
+                s <- get
                 let s2 :: Status a
                     s2 = case op1 of
                             Read  -> s { readers = q }
                             Write -> s { writers = q }
-                put (True, s2)
+                put s2
 
             getCurrent :: StatusM a (Maybe a)
             getCurrent = do
-                (_, s) <- get
+                s <- get
                 pure $ current s
 
             setCurrent :: Maybe a -> StatusM a ()
             setCurrent newCurrent = do
-                (_, s) <- get
-                put (True, s { current = newCurrent })
+                s <- get
+                put (s { current = newCurrent })
 
             other :: Op -> Op
             other Read  = Write
