@@ -369,10 +369,41 @@ module Data.Conduit.Parallel.Internal.Duct(
                             Just (Just b) ->
                                 pure $ Just b
 
+            purgeAbandons ::
+                Op
+                -> StatusM a (Queue Waiter, Maybe (Waiter, WaiterStatus))
+            purgeAbandons op1 = do
+                    q :: Queue Waiter <- getQueue op1
+                    loop q False
+                where
+                    loop :: Queue Waiter
+                                -> Bool
+                                -> StatusM a (Queue Waiter,
+                                                Maybe (Waiter, WaiterStatus))
+                    loop q needWrite =
+                        case qhead q of
+                            Nothing     -> fini q needWrite Nothing
+                            Just waiter -> do
+                                s <- lift $ readTVar (waiterTVar waiter)
+                                case s of
+                                    Abandoned -> loop (qtail q) True
+                                    _         -> fini q needWrite
+                                                    (Just (waiter, s))
+
+                    fini :: Queue Waiter
+                                -> Bool
+                                -> Maybe (Waiter, WaiterStatus)
+                                -> StatusM a (Queue Waiter,
+                                                Maybe (Waiter, WaiterStatus))
+                    fini q needWrite status = do
+                        if needWrite
+                        then setQueue op1 q
+                        else pure ()
+                        pure (q, status)
 
             beforeBlocking :: Waiter -> StatusM a (Maybe b)
             beforeBlocking waiter = do
-                q :: Queue Waiter <- getQueue op
+                (q :: Queue Waiter, _) <- purgeAbandons op
                 if (qnull q)
                 then do
                     -- No one else is waiting, so check the current value
@@ -456,20 +487,16 @@ module Data.Conduit.Parallel.Internal.Duct(
 
             ensureAwake :: Op -> StatusM a ()
             ensureAwake op1 = do
-                q :: Queue Waiter <- getQueue op1
-                case qhead q of
-                    Nothing     -> pure ()
-                    Just waiter -> do
-                        s <- lift $ readTVar (waiterTVar waiter)
-                        case s of
-                            Waiting   -> do
-                                lift $ writeTVar (waiterTVar waiter) Awoken
-                                pure ()
-                            Awoken    -> pure ()
-                            Abandoned -> do
-                                setQueue op1 (qtail q)
-                                ensureAwake op1
-                            Closing   -> pure ()
+                (_, s :: Maybe (Waiter, WaiterStatus)) <- purgeAbandons op1
+
+                case s of
+                    Nothing                  -> pure ()
+                    Just (waiter, Waiting)   -> do
+                        lift $ writeTVar (waiterTVar waiter) Awoken
+                        pure ()
+                    Just (_,      Awoken)    -> pure ()
+                    Just (_,      Abandoned) -> pure () -- Should never happen
+                    Just (_,      Closing)   -> pure ()
  
             getQueue :: Op -> StatusM a (Queue Waiter)
             getQueue op1 = do

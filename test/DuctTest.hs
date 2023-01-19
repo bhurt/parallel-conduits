@@ -6,9 +6,11 @@ module DuctTest(
 
     import           Control.Concurrent                  (threadDelay)
     import           Control.Concurrent.Async
+    import qualified Control.Exception                   as Ex
     import           Control.Monad.Codensity
     import           Control.Monad.IO.Class
     import           Data.Conduit.Parallel.Internal.Duct
+    import           Data.Proxy                          (Proxy (..))
     import           Test.HUnit
 
     type M = Codensity IO
@@ -22,11 +24,14 @@ module DuctTest(
                     testClosed2,
                     testReadBlock,
                     testWriteBlock,
-                    testRead2,
-                    testWrite2,
-                    testRead3,
-                    testWrite3
+                    testReadN,
+                    testWriteN,
+                    testAbandonRead
                 ]
+
+    data TestException = TestException deriving (Show)
+
+    instance Ex.Exception TestException where
 
     spawnTest :: IO Bool -> M (Async Bool)
     spawnTest act = Codensity go
@@ -49,15 +54,24 @@ module DuctTest(
     testRead :: ReadDuct Int -> Maybe Int -> IO Bool
     testRead rd val = do
         val1 :: Maybe a <- readDuct rd
-        if (val1 /= val)
-        then putStrLn $ "Expected " ++ show val ++ " but got " ++ show val1
-        else pure ()
         pure $ val1 == val
 
     testWrite :: WriteDuct Int -> Int -> Open -> IO Bool
     testWrite wd val op = do
         op2 :: Open <- writeDuct wd val
         pure $ op == op2
+
+    testExWith :: forall e . Ex.Exception e => Proxy e -> IO Bool -> IO Bool
+    testExWith Proxy act = (act >> pure False) `Ex.catch` handler
+        where
+            handler :: e -> IO Bool
+            handler _ = pure True
+
+    testEx :: IO Bool -> IO Bool
+    testEx = testExWith (Proxy :: Proxy TestException)
+
+    cancelTest :: Async Bool -> M ()
+    cancelTest asy = liftIO $ cancelWith asy TestException
 
     testRead1 :: Test
     testRead1 = runTest "testRead1" $ do
@@ -107,67 +121,58 @@ module DuctTest(
                         _ <- spawnTest $ testRead rd (Just 2)
                         pure ()
 
-    testRead2 :: Test
-    testRead2 = runTest "testRead2" $ do
-                    -- Two reads get filled in order
-                    (rd, wd) <- liftIO $ newDuct
-                    _ <- spawnTest $ testRead rd (Just 1)
-                    pause
-                    _ <- spawnTest $ testRead rd (Just 2)
-                    pause
-                    _ <- spawnTest $ testWrite wd 1 Open
-                    pause
-                    _ <- spawnTest $ testWrite wd 2 Open
-                    pure ()
+    testReadN :: Test
+    testReadN = TestLabel "testReadN" $ TestList $ makeTest <$> [ 2 .. 7 ]
+        where
+            -- We cue up N reads, then do N writes, and make sure everything
+            -- happens in order.
+            makeTest :: Int -> Test
+            makeTest n = runTest ("testRead" ++ show n) $ do
+                (rd, wd) <- liftIO $ newDuct
+                mapM_ (spawnRead rd) [ 1 .. n ]
+                mapM_ (spawnWrite wd) [ 1 .. n ]
 
-    testWrite2 :: Test
-    testWrite2 = runTest "testWrite2" $ do
-                    -- Two writes get filled in order
-                    (rd, wd) <- liftIO $ newFullDuct 1
-                    _ <- spawnTest $ testWrite wd 2 Open
-                    pause
-                    _ <- spawnTest $ testWrite wd 3 Open
-                    pause
-                    _ <- spawnTest $ testRead rd (Just 1)
-                    pause
-                    _ <- spawnTest $ testRead rd (Just 2)
-                    pause
-                    _ <- spawnTest $ testRead rd (Just 3)
-                    pure ()
+            spawnRead :: ReadDuct Int -> Int -> M ()
+            spawnRead rd i = do
+                _ <- spawnTest $ testRead rd (Just i)
+                pause
 
-    testRead3 :: Test
-    testRead3 = runTest "testRead2" $ do
-                    -- Three reads get filled in order
-                    (rd, wd) <- liftIO $ newDuct
-                    _ <- spawnTest $ testRead rd (Just 1)
-                    pause
-                    _ <- spawnTest $ testRead rd (Just 2)
-                    pause
-                    _ <- spawnTest $ testRead rd (Just 3)
-                    pause
-                    _ <- spawnTest $ testWrite wd 1 Open
-                    pause
-                    _ <- spawnTest $ testWrite wd 2 Open
-                    pause
-                    _ <- spawnTest $ testWrite wd 3 Open
-                    pure ()
+            spawnWrite :: WriteDuct Int -> Int -> M ()
+            spawnWrite wd i = do
+                _ <- spawnTest $ testWrite wd i Open
+                pause
 
-    testWrite3 :: Test
-    testWrite3 = runTest "testWrite2" $ do
-                    -- Three writes get filled in order
-                    (rd, wd) <- liftIO $ newFullDuct 1
-                    _ <- spawnTest $ testWrite wd 2 Open
-                    pause
-                    _ <- spawnTest $ testWrite wd 3 Open
-                    pause
-                    _ <- spawnTest $ testWrite wd 4 Open
-                    pause
-                    _ <- spawnTest $ testRead rd (Just 1)
-                    pause
-                    _ <- spawnTest $ testRead rd (Just 2)
-                    pause
-                    _ <- spawnTest $ testRead rd (Just 3)
-                    pause
-                    _ <- spawnTest $ testRead rd (Just 4)
-                    pure ()
+    testWriteN :: Test
+    testWriteN = TestLabel "testWriteN" $ TestList $ makeTest <$> [ 2 .. 7 ]
+        where
+            -- We cue up N writes, then do N reads and make sure everything
+            -- happens in the correct order.
+            makeTest :: Int -> Test
+            makeTest n = runTest ("testWrite" ++ show n) $ do
+                (rd, wd) <- liftIO $ newFullDuct 1
+                mapM_ (spawnWrite wd) [ 2 .. (n+1) ]
+                mapM_ (spawnRead rd) [ 1 .. (n+1) ]
+
+            spawnRead :: ReadDuct Int -> Int -> M ()
+            spawnRead rd i = do
+                _ <- spawnTest $ testRead rd (Just i)
+                pause
+
+            spawnWrite :: WriteDuct Int -> Int -> M ()
+            spawnWrite wd i = do
+                _ <- spawnTest $ testWrite wd i Open
+                pause
+
+    testAbandonRead :: Test
+    testAbandonRead = runTest "testAbandonRead" $ do
+        (rd, wd) <- liftIO $ newDuct
+        asy1 <- spawnTest $ testEx $ testRead rd (Just 0)
+        pause
+        _ <- spawnTest $ testRead rd (Just 1)
+        pause
+        cancelTest asy1
+        _ <- spawnTest $ testWrite wd 1 Open
+        pure ()
+
+
 
