@@ -22,11 +22,15 @@ library
   exposed-modules:     Data.Conduit.Parallel
                         , Data.Conduit.Parallel.Internal.Duct
   build-depends:       base >= 4.7 && < 5
+                        , concurrency
                         -- , conduit
-                        -- , containers
+                        , containers
                         -- , contravariant
                         -- , deepseq
+                        , exceptions
                         -- , kan-extensions
+                        , lifted-base
+                        , monad-control
                         , mtl
                         -- , profunctors
                         -- , selective

@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric       #-}
+{-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -40,6 +41,7 @@
 -- Instead of take and put, you read and write.  And instead of having
 -- a single Duct type, we have two endpoints, a ReadDuct endpoint (that
 -- can be read from) and a WriteDuct endpoint.
+--
 module Data.Conduit.Parallel.Internal.Duct(
     Open(..),
     ReadDuct,
@@ -53,12 +55,13 @@ module Data.Conduit.Parallel.Internal.Duct(
     writeDuct
 ) where
 
-    import           Control.Concurrent.STM
-    import qualified Control.Exception      as Ex
+    import           Control.Concurrent.Classy
+    import qualified Control.Monad.Catch        as Catch
     import           Control.Monad.State
-    import           Data.List.NonEmpty     (NonEmpty (..))
-    import qualified Data.List.NonEmpty     as NE
-    import           GHC.Generics           (Generic)
+    import           Data.Functor.Contravariant
+    import           Data.Sequence              (Seq)
+    import qualified Data.Sequence              as Seq
+    import           GHC.Generics               (Generic)
 
     -- **********************************************************************
     -- **                                                                  **
@@ -129,7 +132,9 @@ module Data.Conduit.Parallel.Internal.Duct(
     --          - add our waiter to our operation's queue
     --          - commit the first transaction
     --          - start the second transaction
-    --          - block on our waiter
+    --          - block on our waiter.  Note that since this is first TVar
+    --              we access in the current transaction, it is the only
+    --              TVar we wake up for.
     --          - remove ourselves from the right queue
     --          - perform operation
     --          - commit the second transaction
@@ -189,16 +194,6 @@ module Data.Conduit.Parallel.Internal.Duct(
         | Closed    -- ^ The Duct is Closed
         deriving (Show, Read, Ord, Eq, Enum, Bounded, Generic)
 
-    -- | A semi-optimized Banker's queue implementation.
-    --
-    -- This lets us reduce our dependency footprint.  This implementation
-    -- is optimized for the very common cases of an empty queue and a
-    -- queue holding a single value.
-    data Queue a =
-        QEmpty
-        | QSingle a
-        | QFull (NonEmpty a) (NonEmpty a)
-
     -- | The status of a waiter.
     data WaiterStatus =
         Waiting         -- ^ A thread is blocked waiting on this waiter
@@ -211,371 +206,485 @@ module Data.Conduit.Parallel.Internal.Duct(
         | Closing       -- ^ The Duct has been closed.
 
     -- | A thread blocking waiting for it's turn.
-    newtype Waiter = Waiter {
-        waiterTVar :: TVar WaiterStatus
-    } deriving (Eq)
+    newtype Waiter m = Waiter {
+        waiterTVar :: TVar (STM m) WaiterStatus
+    }
+    -- Classy STM doesn't allow us to use Eq on TVars.  This is mildly
+    -- annoying.
 
     {-
     For debugging, we may want:
-    data Waiter = Waiter {
-        waiterTVar :: TVar WaiterStatus,
-        waiterThreadId :: ThreadId
-    } deriving (Eq)
+    data Waiter m = Waiter {
+        waiterTVar :: TVar (STM m) WaiterStatus,
+        waiterThreadId :: ThreadId m
+    }
     -}
+
+    -- Just like the idea behind creating boolean-analogs to prevent
+    -- boolean-blindness, we create Maybe-analogs.  I started getting
+    -- lots of different Maybes flying around, meaning different things.
+    -- And this lead to bugs where I mixed up which maybes meant what.
+    -- So I replaced all Maybes with explicit analogs.  The one Maybe
+    -- that remains is the one the user sees.
+
+    -- | Maybe-analog as to whether the duct contains a value or not.
+    data Contents a =
+        Full a
+        | Empty
 
     -- | The current state of a Duct.
     --
     -- This used to be called the State, but then I wanted to use a StateT
     -- transformer, and the name clash caused sadness in the compiler.  So
     -- it got renamed.
-    data Status a = Status {
-                    readers :: Queue Waiter,
-                    writers :: Queue Waiter,
-                    current :: Maybe a }
+    data Status m a = Status {
+                    sreaders :: Seq (Waiter m),
+                    swriters :: Seq (Waiter m),
+                    sclosing :: {-# UNPACK #-} !Bool,
+                    scontents :: Contents a }
 
     -- | The read endpoint of a duct.
-    newtype ReadDuct a = ReadDuct { getReadTVar :: TVar (Maybe (Status a)) }
+    data ReadDuct m a = ReadDuct { 
+                            readDuct :: m (Maybe a),
+                            closeReadDuct :: m (Maybe a) }
+
+    instance Functor m => Functor (ReadDuct m) where
+        fmap f rd = ReadDuct {
+                        readDuct = fmap f <$> readDuct rd,
+                        closeReadDuct = fmap f <$> closeReadDuct rd }
 
     -- | The write endpoint of a duct.
-    newtype WriteDuct a = WriteDuct { getWriteTVar :: TVar (Maybe (Status a)) }
+    data WriteDuct m a = WriteDuct {
+                            writeDuct :: a -> m Open,
+                            closeWriteDuct :: m () }
 
-    -- | Which operation are we performing?
+    instance Contravariant (WriteDuct m) where
+        contramap f wd = wd { writeDuct = (writeDuct wd . f) }
+
+    -- | Maybe-analog for whether an operation has completed or would block.
+    data WouldBlock a =
+        Complete a
+        | WouldBlock
+
+    -- | Maybe-analog for whether the duct is closed or not.
     --
-    -- A bad idea, carried through to perfection.
-    --
-    -- Reads and writes are almost identical.  We take advantage of that
-    -- plus the fact that we're unlikely to add new operations to eliminate
-    -- a bunch of code duplication.
-    --
-    data Op = Read | Write
+    -- Note: I can tell the difference between WouldBlock (IsClosed a)
+    -- and IsClosed (WouldBlock a).  With Maybe (Maybe a), I can't.
+    data IsClosed a =
+        IsOpen a
+        | IsClosed
 
-    type StatusM a x = StateT (Status a) STM x
+    type StatusM m a x = StateT (Status m a) (STM m) x
 
-    newDuct :: forall a . IO (ReadDuct a, WriteDuct a)
-    newDuct = do
-            tvar <- newTVarIO (Just defaultStatus)
-            pure (ReadDuct tvar, WriteDuct tvar)
+
+    data SLens m a x = SLens {
+        view :: Status m a -> x,
+        update :: x -> Status m a -> Status m a
+    }
+
+    readers :: forall a m . SLens m a (Seq (Waiter m))
+    readers = SLens {
+                view = sreaders,
+                update = \x s -> s { sreaders = x } }
+
+    writers :: forall a m . SLens m a (Seq (Waiter m))
+    writers = SLens {
+                view = swriters,
+                update = \x s -> s { swriters = x } }
+
+    contents :: forall a m . SLens m a (Contents a)
+    contents = SLens {
+                    view = scontents,
+                    update = \x s -> s { scontents = x } }
+
+    closing :: forall a m . SLens m a Bool
+    closing = SLens {
+                    view = sclosing,
+                    update = \x s -> s { sclosing = x } }
+
+    viewM :: Monad (STM m) => SLens m a x -> StatusM m a x
+    viewM lens = view lens <$> get
+    {-# INLINE viewM #-}
+
+    give :: Monad (STM m) => SLens m a x -> x -> StatusM m a ()
+    give lens val = modify (update lens val)
+
+    mutate :: Monad (STM m) => SLens m a x -> (x -> x) -> StatusM m a ()
+    mutate lens f = modify (\s -> update lens (f (view lens s)) s)
+
+    addWaiter :: forall m a .
+                    Monad (STM m)
+                    => SLens m a (Seq (Waiter m))
+                    -> Waiter m
+                    -> StatusM m a ()
+    addWaiter lens w = mutate lens (Seq.|> w)
+
+    getQueueHead :: forall a m .
+                        MonadSTM (STM m)
+                        => SLens m a (Seq (Waiter m))
+                        -> StatusM m a (Maybe (Waiter m))
+    getQueueHead queue = do
+            q :: Seq (Waiter m) <- viewM queue
+            loop False q
         where
-            defaultStatus :: Status a
-            defaultStatus = Status {
-                                readers = QEmpty,
-                                writers = QEmpty,
-                                current = Nothing }
-
-    newFullDuct :: forall a . a -> IO (ReadDuct a, WriteDuct a)
-    newFullDuct x = do
-            tvar <- newTVarIO (Just defaultStatus)
-            pure (ReadDuct tvar, WriteDuct tvar)
-        where
-            defaultStatus :: Status a
-            defaultStatus = Status {
-                                readers = QEmpty,
-                                writers = QEmpty,
-                                current = Just x }
-
-    newClosedDuct :: forall a . IO (ReadDuct a, WriteDuct a)
-    newClosedDuct = do
-        tvar <- newTVarIO Nothing
-        pure (ReadDuct tvar, WriteDuct tvar)
-
-    closeDuct :: forall a .  TVar (Maybe (Status a)) -> IO (Maybe a)
-    closeDuct tvar = join . atomically $ go
-        where
-            go :: STM (IO (Maybe a))
-            go = do
-                r <- readTVar tvar
-                case r of
-                    Nothing -> pure $ pure Nothing
-                    Just st -> do
-                        writeTVar tvar Nothing
-                        pure $ closeQueue (readers st)
-                                >> closeQueue (writers st)
-                                >> pure (current st)
-
-            closeQueue :: Queue Waiter -> IO ()
-            closeQueue QEmpty                      = pure ()
-            closeQueue (QSingle x)                 = closeWaiter x
-            closeQueue (QFull (x :| xs) (y :| ys)) = do
-                closeWaiter x
-                mapM_ closeWaiter xs
-                mapM_ closeWaiter (reverse ys)
-                closeWaiter y
-
-            closeWaiter :: Waiter -> IO ()
-            closeWaiter waiter =
-                atomically $ writeTVar (waiterTVar waiter) Closing
-
-    closeReadDuct :: forall a . ReadDuct a -> IO (Maybe a)
-    closeReadDuct = closeDuct . getReadTVar
-
-    closeWriteDuct :: forall a . WriteDuct a -> IO (Maybe a)
-    closeWriteDuct = closeDuct . getWriteTVar
-
-    
-    modifyDuct :: forall a b . 
-                    Op
-                    -> (Maybe a -> Maybe (Maybe a, b))
-                    -> TVar (Maybe (Status a))
-                    -> IO (Maybe b) -- Nothing == Closed
-    modifyDuct op modCurrent tvar =
-            -- The waiter starts life as abandoned, and we set it to
-            -- waiting when we add it to the queue.  This way, the
-            -- cleanup doesn't do unnecessary work.
-            Ex.bracketOnError makeWaiter cleanUp go
-        where
-            makeWaiter :: IO Waiter
-            makeWaiter =
-                Waiter
-                    <$> newTVarIO Abandoned
-                    -- <*> myThreadId
-
-            withStatus :: forall x . StatusM a x -> STM (Maybe x)
-            withStatus act = do
-                ms :: Maybe (Status a) <- readTVar tvar
-                case ms of
-                    Nothing    -> pure Nothing
-                    Just st -> do
-                        (x, s) <- runStateT act st
-                        writeTVar tvar (Just s)
-                        pure $ Just x
-
-            go :: Waiter -> IO (Maybe b)
-            go waiter = do
-                r :: Maybe (Maybe b)
-                    <- atomically $ withStatus (beforeBlocking waiter)
-                case r of
-                    -- We're closed
-                    Nothing -> pure Nothing
-
-                    -- We don't need to block
-                    Just (Just b) -> pure (Just b)
-
-                    -- We're blocking
-                    Just Nothing -> do
-                        t :: Maybe (Maybe b) <- atomically $ block waiter
-                        case t of
-                            -- We're closed
-                            Nothing -> pure Nothing
-                            -- We hit a logic error- we were woken up
-                            -- but the current status wasn't correct.
-                            -- So throw an exception.
-                            -- See the comment down in blocking.
-                            Just Nothing ->
-                                Ex.assert False $
-                                    error "Unreachable state reached."
-                            -- We succeeded.
-                            Just (Just b) ->
-                                pure $ Just b
-
-            purgeAbandons ::
-                Op
-                -> StatusM a (Queue Waiter, Maybe (Waiter, WaiterStatus))
-            purgeAbandons op1 = do
-                    q :: Queue Waiter <- getQueue op1
-                    loop q False
-                where
-                    loop :: Queue Waiter
-                                -> Bool
-                                -> StatusM a (Queue Waiter,
-                                                Maybe (Waiter, WaiterStatus))
-                    loop q needWrite =
-                        case qhead q of
-                            Nothing     -> fini q needWrite Nothing
-                            Just waiter -> do
-                                s <- lift $ readTVar (waiterTVar waiter)
-                                case s of
-                                    Abandoned -> loop (qtail q) True
-                                    _         -> fini q needWrite
-                                                    (Just (waiter, s))
-
-                    fini :: Queue Waiter
-                                -> Bool
-                                -> Maybe (Waiter, WaiterStatus)
-                                -> StatusM a (Queue Waiter,
-                                                Maybe (Waiter, WaiterStatus))
-                    fini q needWrite status = do
-                        if needWrite
-                        then setQueue op1 q
-                        else pure ()
-                        pure (q, status)
-
-            beforeBlocking :: Waiter -> StatusM a (Maybe b)
-            beforeBlocking waiter = do
-                (q :: Queue Waiter, _) <- purgeAbandons op
-                if (qnull q)
-                then do
-                    -- No one else is waiting, so check the current value
-                    curr <- getCurrent
-                    case modCurrent curr of
-                        -- If we don't have a value in the current, we need
-                        -- to block
-                        Nothing -> do
-                            lift $ writeTVar (waiterTVar waiter) Waiting
-                            setQueue op (enqueue q waiter)
-                            pure Nothing
-                        -- If we got a value, wake up the other side
-                        Just (newCurrent, b) -> do
-                            setCurrent newCurrent
-                            ensureAwake (other op)
-                            pure (Just b)
-                else do
-                    -- Other people are in queue, add ourselves
-                    lift $ writeTVar (waiterTVar waiter) Waiting
-                    setQueue op (enqueue q waiter)
-                    pure Nothing
-
-            block :: Waiter -> STM (Maybe (Maybe b))
-            block waiter = do
-                r <- readTVar (waiterTVar waiter)
-                case r of
-                    Waiting   -> retry        -- block
-                    Abandoned -> pure Nothing -- This should not be possible.
-                    Closing   -> pure Nothing
-                    Awoken    -> do
-                        -- Mark our waiter as abandoned- this is important to
-                        -- prevent the cleanup routine from doing unnecessary
-                        -- work if this transaction commits.
-                        writeTVar (waiterTVar waiter) Abandoned
-                        withStatus $ afterBlocking waiter
-
-            afterBlocking :: Waiter -> StatusM a (Maybe b)
-            afterBlocking _waiter = do
-                -- remove ourselves from the queue
-                q :: Queue Waiter <- getQueue op
-                Ex.assert (Just _waiter == qhead q) $ pure ()
-                setQueue op (qtail q)
-
-                -- Get our value
-                curr <- getCurrent
-                case modCurrent curr of
-                    -- This should never return Nothing.  This represents
-                    -- a logic fail.  Normally, we'd throw an exception
-                    -- right here, but we want the transaction to commit.
-                    -- So we delay throwing the exception.
-                    Nothing -> do
-                        ensureAwake (other op)
+            loop :: Bool
+                    -> Seq (Waiter m)
+                    -> StatusM m a (Maybe (Waiter m))
+            loop needSave q = do
+                case Seq.viewl q of
+                    Seq.EmptyL  -> do
+                        saveQueue needSave q
                         pure Nothing
-                    Just (newCurrent, b) -> do
-                        setCurrent newCurrent
-                        ensureAwake (other op)
-                        pure (Just b)
+                    w Seq.:< ws -> do
+                        s :: WaiterStatus <- lift . readTVar $ waiterTVar w
+                        case s of
+                            Abandoned -> loop True ws
+                            _         -> do
+                                saveQueue needSave q
+                                pure $ Just w
 
-            cleanUp :: Waiter -> IO ()
-            cleanUp waiter = do
-                s <- atomically $ do
-                        s <- readTVar (waiterTVar waiter)
-                        writeTVar (waiterTVar waiter) Abandoned
-                        pure s
-                case s of
-                    Waiting   -> pure ()
-                    -- Abandoned isn't an unusual value here- it means
-                    -- either we haven't added ourselves to a queue
-                    -- (yet), or we've dequeued ourselves and completed
-                    -- the operation and then got hit with an async
-                    -- exception.  In either case, cleanup is a no-op.
-                    Abandoned -> pure ()
-                    Closing   -> pure ()
-                    Awoken    -> do
-                        _ <- atomically . withStatus $ do
-                                curr <- getCurrent
-                                case curr of
-                                    Nothing -> ensureAwake Write
-                                    Just _  -> ensureAwake Read
-                        pure ()
-
-            ensureAwake :: Op -> StatusM a ()
-            ensureAwake op1 = do
-                (_, s :: Maybe (Waiter, WaiterStatus)) <- purgeAbandons op1
-
-                case s of
-                    Nothing                  -> pure ()
-                    Just (waiter, Waiting)   -> do
-                        lift $ writeTVar (waiterTVar waiter) Awoken
-                        pure ()
-                    Just (_,      Awoken)    -> pure ()
-                    Just (_,      Abandoned) -> pure () -- Should never happen
-                    Just (_,      Closing)   -> pure ()
- 
-            getQueue :: Op -> StatusM a (Queue Waiter)
-            getQueue op1 = do
-                s <- get
-                pure $ case op1 of
-                            Read  -> readers s
-                            Write -> writers s
-
-            setQueue :: Op -> Queue Waiter -> StatusM a ()
-            setQueue op1 q = do
-                s <- get
-                let s2 :: Status a
-                    s2 = case op1 of
-                            Read  -> s { readers = q }
-                            Write -> s { writers = q }
-                put s2
-
-            getCurrent :: StatusM a (Maybe a)
-            getCurrent = do
-                s <- get
-                pure $ current s
-
-            setCurrent :: Maybe a -> StatusM a ()
-            setCurrent newCurrent = do
-                s <- get
-                put (s { current = newCurrent })
-
-            other :: Op -> Op
-            other Read  = Write
-            other Write = Read
+            saveQueue :: Bool -> Seq (Waiter m) -> StatusM m a ()
+            saveQueue False _ = pure ()
+            saveQueue True  q = give queue q
 
 
-    readDuct :: forall a . ReadDuct a -> IO (Maybe a)
-    readDuct = modifyDuct Read f . getReadTVar
+    awaken :: forall a m . 
+                MonadSTM (STM m)
+                => SLens m a (Seq (Waiter m)) 
+                -> StatusM m a ()
+    awaken q = do
+        r <- getQueueHead q
+        case r of
+            Nothing -> pure ()
+            Just w  -> lift $ writeTVar (waiterTVar w) Awoken
+
+    removeHead :: forall a m .
+                    Monad (STM m)
+                    => SLens m a (Seq (Waiter m))
+                    -> StatusM m a (Waiter m)
+    removeHead queue = do
+        q :: Seq (Waiter m) <- viewM queue
+        case Seq.viewl q of
+            Seq.EmptyL  -> error "removeHead called on empty queue!"
+            w Seq.:< ws -> do
+                give queue ws
+                pure w
+
+    ifM :: forall m a . Monad m => m Bool -> m a -> m a -> m a
+    ifM testM thenM elseM = do
+        t <- testM
+        if t
+        then thenM
+        else elseM
+
+    withWaiter :: forall a b m .
+                    (Catch.MonadCatch m
+                    , Catch.MonadMask m
+                    , MonadConc m)
+                    => TVar (STM m) (IsClosed (Status m b))
+                    -> (Waiter m -> m a)
+                    -> m a
+    withWaiter tvar go = Catch.bracketOnError makeWaiter doCleanUp go
         where
-            f :: Maybe a -> Maybe (Maybe a, a)
-            f Nothing = Nothing
-            f (Just a) = Just (Nothing, a)
+            makeWaiter :: m (Waiter m)
+            makeWaiter = Waiter <$> newTVarConc Abandoned
+                                -- <*> myThreadId
 
+            doCleanUp :: Waiter m -> m ()
+            doCleanUp waiter =
+                atomically $ do
+                    writeTVar (waiterTVar waiter) Abandoned
+                    withOpen tvar () $ do
+                        cnts <- viewM contents
+                        case cnts of
+                            Full _ -> awaken readers
+                            Empty  -> ifM (viewM closing)
+                                        (pure ()) 
+                                        (awaken writers)
+                        pure (Open, ())
 
-    writeDuct :: forall a . WriteDuct a -> a -> IO Open
-    writeDuct duct a = fixup <$> modifyDuct Write f (getWriteTVar duct)
+    withOpen :: forall a b m .
+                    MonadSTM (STM m)
+                    => TVar (STM m) (IsClosed (Status m a))
+                    -> b
+                    -> StatusM m a (Open, b)
+                    -> STM m b
+    withOpen tvar onClosed onOpen = do
+        ic :: IsClosed (Status m a) <- readTVar tvar
+        case ic of
+            IsClosed -> pure onClosed
+            IsOpen s1 -> do
+                ((open, b), s2) :: ((Open, b), Status m a)
+                    <- runStateT onOpen s1 
+                case open of
+                    Open   -> writeTVar tvar (IsOpen s2)
+                    Closed -> writeTVar tvar IsClosed
+                pure b
+
+    block :: forall a x m .
+                MonadSTM (STM m)
+                => SLens m a (Seq (Waiter m))
+                -> Waiter m
+                -> StatusM m a (Open, (WouldBlock x))
+    block queue waiter = do
+        lift $ writeTVar (waiterTVar waiter) Waiting
+        addWaiter queue waiter
+        pure (Open, WouldBlock)
+
+    getInLine :: forall a x m .
+                    MonadSTM (STM m)
+                    => SLens m a (Seq (Waiter m))
+                    -> Waiter m
+                    -> StatusM m a (Open, WouldBlock x)
+                    -> StatusM m a (Open, WouldBlock x)
+    getInLine queue waiter act = do
+        -- Are there other waiters ahead of us in the queue?
+        r <- getQueueHead queue
+        case r of
+            Just _ -> do
+                -- Yes, there are other waiters ahead of us in
+                -- the queue.  Add ourselves to the queue.
+                block queue waiter
+            Nothing -> do
+                -- Nope, no other waiters ahead of us.
+                act
+
+    waitForWaiter :: forall a x m .
+                        MonadSTM (STM m)
+                        => SLens m a (Seq (Waiter m))
+                        -> Waiter m
+                        -> x
+                        -> StatusM m a x
+                        -> StatusM m a x
+    waitForWaiter queue waiter onClosed act = do
+        ws :: WaiterStatus <- lift $ readTVar (waiterTVar waiter)
+        case ws of
+            Waiting   -> lift retry     -- Block
+            Abandoned -> pure onClosed
+            Closing   -> pure onClosed
+            Awoken    -> do
+                -- We know we are on the queue, and we should be
+                -- the head.  So we just remove the head element.
+                _ <- removeHead queue
+                -- We used to assert that the waiter we just removed
+                -- was us.  Unfortunately, Classy STM doesn't define Eq
+                -- for TVars, so we can't.  We just have to assume this
+                -- is correct.
+                act
+
+    handleBlock :: forall x m .
+                    MonadConc m
+                    => (Waiter m -> STM m (WouldBlock x))
+                    -> (Waiter m -> STM m x)
+                    -> Waiter m
+                    -> m x
+    handleBlock preblock postblock waiter = do
+        r <- atomically $ preblock waiter
+        case r of
+            Complete x -> pure x
+            WouldBlock -> atomically $ postblock waiter
+
+    setContents :: forall a m .
+                    MonadSTM (STM m)
+                    => Contents a
+                    -> StatusM m a ()
+    setContents cnts = do
+        give contents cnts
+        case cnts of
+            Empty -> awaken writers
+            Full _ -> awaken readers
+
+    closeAll :: MonadSTM (STM m) => Seq (Waiter m) -> STM m ()
+    closeAll q = 
+        case Seq.viewl q of
+            Seq.EmptyL  -> pure ()
+            w Seq.:< ws -> do
+                writeTVar (waiterTVar w) Closing
+                closeAll ws
+
+    doReadDuct :: forall a m .
+                    MonadConc m
+                    => TVar (STM m) (IsClosed (Status m a))
+                    -> m (Maybe a)
+    doReadDuct tvar = withWaiter tvar $ handleBlock preblock postblock
         where
-            f :: Maybe a -> Maybe (Maybe a, ())
-            f Nothing  = Just (Just a, ())
-            f (Just _) = Nothing
+            preblock :: Waiter m -> STM m (WouldBlock (Maybe a))
+            preblock waiter = do
+                -- Are we even open?  If not, return Nothing.
+                withOpen tvar (Complete Nothing) $ do
+                    getInLine readers waiter $ do
+                        -- Look the contents of the duct.
+                        cnts :: Contents a <- viewM contents
+                        case cnts of
+                            Empty  -> do
+                                -- The duct is empty.  Block until it
+                                -- isn't.
+                                block readers waiter
+                            Full a -> do
+                                emptyContents (Complete (Just a))
 
-            fixup :: Maybe () -> Open
-            fixup Nothing   = Closed
-            fixup (Just ()) = Open
+            postblock :: Waiter m -> STM m (Maybe a)
+            postblock waiter = 
+                -- Make sure we are still open
+                withOpen tvar Nothing $ do
+                    -- wait to be woken up.
+                    waitForWaiter readers waiter (Open, Nothing) $ do
+                        -- Get the contents
+                        cnts :: Contents a <- viewM contents
+                        case cnts of
+                            Empty  ->
+                                -- We should not have been woken up
+                                -- if the duct is empty.
+                                error $ "readDuct woken up on "
+                                        ++ "empty duct."
+                            Full a -> do
+                                -- The duct is not empty.  Empty it.
+                                emptyContents (Just a)
 
-    enqueue :: Queue a -> a -> Queue a
-    enqueue QEmpty        x = QSingle x
-    enqueue (QSingle x)   y = QFull (NE.singleton x) (NE.singleton y)
-    enqueue (QFull hs ts) x = QFull hs (NE.cons x ts)
+            emptyContents :: forall r . r -> StatusM m a (Open, r)
+            emptyContents r = do
+                                -- The duct is not empty.  If we are closing,
+                                -- close the duct.  Otherwise, empty the
+                                -- contents, then return the value.
+                                ifM (viewM closing)
+                                    (pure (Closed, r))
+                                    $ do
+                                        setContents Empty
+                                        pure (Open, r)
 
-    qnull :: Queue a -> Bool
-    qnull QEmpty      = True
-    qnull (QSingle _) = False
-    qnull (QFull _ _) = False
+    doCloseReadDuct :: forall a m .
+                        MonadConc m
+                        => TVar (STM m) (IsClosed (Status m a))
+                        -> m (Maybe a)
+    doCloseReadDuct tvar = atomically $ do
+        ms :: IsClosed (Status m a) <- readTVar tvar
+        case ms of
+            IsClosed -> pure Nothing
+            IsOpen s -> do
+                writeTVar tvar IsClosed
+                closeAll (view readers s)
+                closeAll (view writers s)
+                pure $ case view contents s of
+                            Empty -> Nothing
+                            Full a -> Just a
 
-    qhead :: Queue a -> Maybe a
-    qhead QEmpty             = Nothing
-    qhead (QSingle x)        = Just x
-    qhead (QFull (x :| _) _) = Just x
+    doWriteDuct :: forall a m .
+                    MonadConc m
+                    => TVar (STM m) (IsClosed (Status m a))
+                    -> a
+                    -> m Open
+    doWriteDuct tvar val = withWaiter tvar $ handleBlock preblock postBlock
+        where
+            preblock :: Waiter m -> STM m (WouldBlock Open)
+            preblock waiter = do
+                -- Are we even open?  If not, return Closed.
+                withOpen tvar (Complete Closed) $ do
+                    -- Note: we can be closed for writing, even if we're
+                    -- still open for reading.
+                    ifM (viewM closing)
+                        (pure (Open, (Complete Closed)))
+                        $ do
+                            getInLine writers waiter $ do
+                            -- Look the contents of the duct.
+                            cnts :: Contents a <- viewM contents
+                            case cnts of
+                                Empty  -> do
+                                    -- The duct is empty.  Fill it.
+                                    setContents (Full val)
+                                    pure (Open, Complete Open)
+                                Full _ -> do
+                                    -- The duct is not empty.  Block until
+                                    -- it is.
+                                    block writers waiter
 
-    qtail :: Queue a -> Queue a
-    qtail QEmpty                              = QEmpty
-    qtail (QSingle _)                         = QEmpty
-    qtail (QFull (_ :| []) (x  :| xs))        =
-        case reverse xs of
-            []     -> QSingle x
-            (y:ys) -> QFull (y :| ys) (x :| [])
-    qtail (QFull (_ :| (x : xs)) ts)          = QFull (x :| xs) ts
+            postBlock :: Waiter m -> STM m Open
+            postBlock waiter = 
+                -- Make sure we are still open
+                withOpen tvar Closed $ do
+                    -- wait to be woken up.
+                    waitForWaiter writers waiter (Closed, Closed) $ do
+                        ifM (viewM closing)
+                            -- Note: if the closing variable is True, we're
+                            -- still open for reading.  So this is correct,
+                            -- as weird as it looks.
+                            (pure (Open, Closed))
+                            $ do
+                                -- Get the contents
+                                cnts :: Contents a <- viewM contents
+                                case cnts of
+                                    Empty  -> do
+                                        setContents (Full val)
+                                        pure (Open, Open)
+                                    Full _ -> do
+                                        -- We should not have been woken up
+                                        -- if the duct is full.
+                                        error $ "writeDuct woken up on "
+                                                ++ "full duct."
 
-    -- Needed for debugging.
-    {-
-    qelems :: Queue a -> [ a ]
-    qelems QEmpty = []
-    qelems (QSingle x) = [ x ]
-    qelems (QFull (x :| xs) (y :| ys)) = x : (xs ++ reverse ys ++ [y])
-    -}
 
+    doCloseWriteDuct :: forall a m .
+                            MonadConc m
+                            => TVar (STM m) (IsClosed (Status m a))
+                            -> m ()
+    doCloseWriteDuct tvar = atomically $ do
+        ms :: IsClosed (Status m a) <- readTVar tvar
+        case ms of
+            IsClosed -> pure ()
+            IsOpen s -> do
+                case (view contents s) of
+                    Empty -> do
+                        writeTVar tvar IsClosed
+                        closeAll (view readers s)
+                        closeAll (view writers s)
+                    Full _ -> do
+                        let s2 = update writers Seq.empty s
+                            s3 = update closing True s2
+                        writeTVar tvar (IsOpen s3)
+                        closeAll (view writers s)
+
+    makeDuct :: forall a m .
+                    MonadConc m
+                    => TVar (STM m) (IsClosed (Status m a))
+                    -> (ReadDuct m a, WriteDuct m a)
+    makeDuct tvar = (rd, wd)
+        where
+            rd :: ReadDuct m a
+            rd = ReadDuct {
+                    readDuct = doReadDuct tvar,
+                    closeReadDuct = doCloseReadDuct tvar }
+            wd :: WriteDuct m a
+            wd = WriteDuct {
+                    writeDuct = doWriteDuct tvar,
+                    closeWriteDuct = doCloseWriteDuct tvar }
+
+    makeStatus :: forall a m . Contents a -> IsClosed (Status m a)
+    makeStatus r = IsOpen $
+                        Status {
+                            sreaders = mempty,
+                            swriters = mempty,
+                            sclosing = False,
+                            scontents = r }
+
+    newDuct :: forall a m . MonadConc m => m (ReadDuct m a, WriteDuct m a)
+    newDuct = makeDuct <$> newTVarConc (makeStatus Empty) 
+
+    newFullDuct :: forall a m .
+                    MonadConc m
+                    => a
+                    -> m (ReadDuct m a, WriteDuct m a)
+    newFullDuct a = makeDuct <$> newTVarConc (makeStatus (Full a))
+
+    newClosedDuct :: forall a m .
+                        Applicative m
+                        => m (ReadDuct m a, WriteDuct m a)
+    newClosedDuct = pure (rd, wd)
+        where
+            rd :: ReadDuct m a
+            rd = ReadDuct {
+                    readDuct = pure Nothing,
+                    closeReadDuct = pure Nothing }
+            wd :: WriteDuct m a
+            wd = WriteDuct {
+                    writeDuct = (\_ -> pure Closed),
+                    closeWriteDuct = pure () }
 
