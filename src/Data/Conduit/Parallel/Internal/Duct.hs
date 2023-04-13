@@ -546,6 +546,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                                 block readers waiter
                             Full a -> do
                                 emptyContents (Complete (Just a))
+            {-# INLINE preblock #-}
 
             postblock :: Waiter m -> STM m (Maybe a)
             postblock waiter = 
@@ -567,6 +568,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                                 Full a -> do
                                     -- The duct is not empty.  Empty it.
                                     emptyContents (Just a)
+            {-# INLINE postblock #-}
 
             emptyContents :: forall r . r -> StatusM m a r
             emptyContents r = do
@@ -577,6 +579,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                                     closeStatusM
                                     $ setContents Empty
                                 pure r
+            {-# INLINE emptyContents #-}
 
     doCloseReadDuct :: forall a m .
                         MonadConc m
@@ -599,7 +602,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                     => StatusTVar m a
                     -> a
                     -> m Open
-    doWriteDuct tvar val = withWaiter tvar $ handleBlock preblock postBlock
+    doWriteDuct tvar val = withWaiter tvar $ handleBlock preblock postblock
         where
             preblock :: Waiter m -> STM m (WouldBlock Open)
             preblock waiter = runStatusM tvar $ do
@@ -621,8 +624,10 @@ module Data.Conduit.Parallel.Internal.Duct(
                                     -- it is.
                                     block writers waiter
 
-            postBlock :: Waiter m -> STM m Open
-            postBlock waiter = 
+            {-# INLINE preblock #-}
+
+            postblock :: Waiter m -> STM m Open
+            postblock waiter = 
                 waitForWaiter waiter Closed $ do
                     runStatusM tvar $ do
                         -- Make sure we are still open
@@ -640,6 +645,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                                         -- if the duct is full.
                                         error $ "writeDuct woken up on "
                                                 ++ "full duct."
+            {-# INLINE postblock #-}
 
 
     doCloseWriteDuct :: forall a m .
