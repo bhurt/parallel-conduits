@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -240,7 +241,7 @@ module Data.Conduit.Parallel.Internal.Duct(
     data Status m a = Status {
                     sreaders :: Seq (Waiter m),
                     swriters :: Seq (Waiter m),
-                    sclosing :: {-# UNPACK #-} !Bool,
+                    sclosing :: Bool,
                     scontents :: Contents a }
 
     -- | The read endpoint of a duct.
@@ -259,7 +260,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                             closeWriteDuct :: m () }
 
     instance Contravariant (WriteDuct m) where
-        contramap f wd = wd { writeDuct = (writeDuct wd . f) }
+        contramap f wd = wd { writeDuct = writeDuct wd . f }
 
     -- | Maybe-analog for whether an operation has completed or would block.
     data WouldBlock a =
@@ -267,15 +268,21 @@ module Data.Conduit.Parallel.Internal.Duct(
         | WouldBlock
 
     -- | Maybe-analog for whether the duct is closed or not.
-    --
-    -- Note: I can tell the difference between WouldBlock (IsClosed a)
-    -- and IsClosed (WouldBlock a).  With Maybe (Maybe a), I can't.
     data IsClosed a =
         IsOpen a
         | IsClosed
 
-    type StatusM m a x = StateT (Status m a) (STM m) x
+    type StatusTVar m a = TVar (STM m) (IsClosed (Status m a))
 
+    type StatusM m a x = StateT (IsClosed (Status m a)) (STM m) x
+
+    isClosed :: forall m a . Monad (STM m) => StatusM m a Bool
+    isClosed = do
+        s <- get
+        pure $ case s of
+                IsClosed -> True
+                IsOpen _ -> False
+    {-# INLINE isClosed #-}
 
     data SLens m a x = SLens {
         view :: Status m a -> x,
@@ -303,14 +310,30 @@ module Data.Conduit.Parallel.Internal.Duct(
                     update = \x s -> s { sclosing = x } }
 
     viewM :: Monad (STM m) => SLens m a x -> StatusM m a x
-    viewM lens = view lens <$> get
+    viewM lens = do
+        r <- get
+        case r of
+            IsClosed -> error "viewM on closed duct!"
+            IsOpen s -> pure $ view lens s
     {-# INLINE viewM #-}
 
     give :: Monad (STM m) => SLens m a x -> x -> StatusM m a ()
-    give lens val = modify (update lens val)
+    give lens val =
+        modify (\case
+                    IsClosed -> IsClosed
+                    IsOpen s -> IsOpen $ update lens val s)
+    {-# INLINE give #-}
 
     mutate :: Monad (STM m) => SLens m a x -> (x -> x) -> StatusM m a ()
-    mutate lens f = modify (\s -> update lens (f (view lens s)) s)
+    mutate lens f =
+        modify (\case
+                    IsClosed -> IsClosed
+                    IsOpen s -> IsOpen $ update lens (f (view lens s)) s)
+    {-# INLINE mutate #-}
+
+    closeStatusM :: Monad (STM m) => StatusM m a ()
+    closeStatusM = put IsClosed
+    {-# INLINE closeStatusM #-}
 
     addWaiter :: forall m a .
                     Monad (STM m)
@@ -318,6 +341,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                     -> Waiter m
                     -> StatusM m a ()
     addWaiter lens w = mutate lens (Seq.|> w)
+    {-# INLINE addWaiter #-}
 
     getQueueHead :: forall a m .
                         MonadSTM (STM m)
@@ -346,6 +370,9 @@ module Data.Conduit.Parallel.Internal.Duct(
             saveQueue :: Bool -> Seq (Waiter m) -> StatusM m a ()
             saveQueue False _ = pure ()
             saveQueue True  q = give queue q
+            {-# INLINE saveQueue #-}
+
+    {-# INLINE getQueueHead #-}
 
 
     awaken :: forall a m . 
@@ -357,18 +384,24 @@ module Data.Conduit.Parallel.Internal.Duct(
         case r of
             Nothing -> pure ()
             Just w  -> lift $ writeTVar (waiterTVar w) Awoken
+    {-# INLINE awaken #-}
 
+    -- We used to assert that the waiter we just removed
+    -- was us.  Unfortunately, Classy STM doesn't define Eq
+    -- for TVars, so we can't.  We just have to assume this
+    -- is correct.
     removeHead :: forall a m .
                     Monad (STM m)
                     => SLens m a (Seq (Waiter m))
-                    -> StatusM m a (Waiter m)
+                    -> StatusM m a ()
     removeHead queue = do
         q :: Seq (Waiter m) <- viewM queue
         case Seq.viewl q of
             Seq.EmptyL  -> error "removeHead called on empty queue!"
-            w Seq.:< ws -> do
+            _ Seq.:< ws -> do
                 give queue ws
-                pure w
+                pure ()
+    {-# INLINE removeHead #-}
 
     ifM :: forall m a . Monad m => m Bool -> m a -> m a -> m a
     ifM testM thenM elseM = do
@@ -376,15 +409,15 @@ module Data.Conduit.Parallel.Internal.Duct(
         if t
         then thenM
         else elseM
+    {-# INLINE ifM #-}
 
     withWaiter :: forall a b m .
                     (Catch.MonadCatch m
-                    , Catch.MonadMask m
                     , MonadConc m)
-                    => TVar (STM m) (IsClosed (Status m b))
+                    => StatusTVar m b
                     -> (Waiter m -> m a)
                     -> m a
-    withWaiter tvar go = Catch.bracketOnError makeWaiter doCleanUp go
+    withWaiter tvar = Catch.bracketOnError makeWaiter doCleanUp
         where
             makeWaiter :: m (Waiter m)
             makeWaiter = Waiter <$> newTVarConc Abandoned
@@ -394,49 +427,45 @@ module Data.Conduit.Parallel.Internal.Duct(
             doCleanUp waiter =
                 atomically $ do
                     writeTVar (waiterTVar waiter) Abandoned
-                    withOpen tvar () $ do
-                        cnts <- viewM contents
-                        case cnts of
-                            Full _ -> awaken readers
-                            Empty  -> ifM (viewM closing)
-                                        (pure ()) 
-                                        (awaken writers)
-                        pure (Open, ())
+                    runStatusM tvar $ do
+                        ifM isClosed (pure ()) $ do
+                            cnts <- viewM contents
+                            case cnts of
+                                Full _ -> awaken readers
+                                Empty  -> ifM (viewM closing)
+                                            (pure ()) 
+                                            (awaken writers)
+    {-# INLINE withWaiter #-}
 
-    withOpen :: forall a b m .
+    runStatusM :: forall a b m .
                     MonadSTM (STM m)
-                    => TVar (STM m) (IsClosed (Status m a))
-                    -> b
-                    -> StatusM m a (Open, b)
+                    => StatusTVar m a
+                    -> StatusM m a b
                     -> STM m b
-    withOpen tvar onClosed onOpen = do
-        ic :: IsClosed (Status m a) <- readTVar tvar
-        case ic of
-            IsClosed -> pure onClosed
-            IsOpen s1 -> do
-                ((open, b), s2) :: ((Open, b), Status m a)
-                    <- runStateT onOpen s1 
-                case open of
-                    Open   -> writeTVar tvar (IsOpen s2)
-                    Closed -> writeTVar tvar IsClosed
-                pure b
+    runStatusM tvar go = do
+        s1 :: IsClosed (Status m a) <- readTVar tvar
+        (b, s2) :: (b, IsClosed (Status m a)) <- runStateT go s1
+        writeTVar tvar s2
+        pure b
+    {-# INLINE runStatusM #-}
 
     block :: forall a x m .
                 MonadSTM (STM m)
                 => SLens m a (Seq (Waiter m))
                 -> Waiter m
-                -> StatusM m a (Open, (WouldBlock x))
+                -> StatusM m a (WouldBlock x)
     block queue waiter = do
         lift $ writeTVar (waiterTVar waiter) Waiting
         addWaiter queue waiter
-        pure (Open, WouldBlock)
+        pure WouldBlock
+    {-# INLINE block #-}
 
     getInLine :: forall a x m .
                     MonadSTM (STM m)
                     => SLens m a (Seq (Waiter m))
                     -> Waiter m
-                    -> StatusM m a (Open, WouldBlock x)
-                    -> StatusM m a (Open, WouldBlock x)
+                    -> StatusM m a (WouldBlock x)
+                    -> StatusM m a (WouldBlock x)
     getInLine queue waiter act = do
         -- Are there other waiters ahead of us in the queue?
         r <- getQueueHead queue
@@ -448,29 +477,22 @@ module Data.Conduit.Parallel.Internal.Duct(
             Nothing -> do
                 -- Nope, no other waiters ahead of us.
                 act
+    {-# INLINE getInLine #-}
 
-    waitForWaiter :: forall a x m .
+    waitForWaiter :: forall x m .
                         MonadSTM (STM m)
-                        => SLens m a (Seq (Waiter m))
-                        -> Waiter m
+                        => Waiter m
                         -> x
-                        -> StatusM m a x
-                        -> StatusM m a x
-    waitForWaiter queue waiter onClosed act = do
-        ws :: WaiterStatus <- lift $ readTVar (waiterTVar waiter)
+                        -> STM m x
+                        -> STM m x
+    waitForWaiter waiter onClosed act = do
+        ws :: WaiterStatus <- readTVar (waiterTVar waiter)
         case ws of
-            Waiting   -> lift retry     -- Block
+            Waiting   -> retry          -- Block
             Abandoned -> pure onClosed
             Closing   -> pure onClosed
-            Awoken    -> do
-                -- We know we are on the queue, and we should be
-                -- the head.  So we just remove the head element.
-                _ <- removeHead queue
-                -- We used to assert that the waiter we just removed
-                -- was us.  Unfortunately, Classy STM doesn't define Eq
-                -- for TVars, so we can't.  We just have to assume this
-                -- is correct.
-                act
+            Awoken    -> act
+    {-# INLINE waitForWaiter #-}
 
     handleBlock :: forall x m .
                     MonadConc m
@@ -483,6 +505,7 @@ module Data.Conduit.Parallel.Internal.Duct(
         case r of
             Complete x -> pure x
             WouldBlock -> atomically $ postblock waiter
+    {-# INLINE handleBlock #-}
 
     setContents :: forall a m .
                     MonadSTM (STM m)
@@ -493,6 +516,7 @@ module Data.Conduit.Parallel.Internal.Duct(
         case cnts of
             Empty -> awaken writers
             Full _ -> awaken readers
+    {-# INLINE setContents #-}
 
     closeAll :: MonadSTM (STM m) => Seq (Waiter m) -> STM m ()
     closeAll q = 
@@ -504,14 +528,14 @@ module Data.Conduit.Parallel.Internal.Duct(
 
     doReadDuct :: forall a m .
                     MonadConc m
-                    => TVar (STM m) (IsClosed (Status m a))
+                    => StatusTVar m a
                     -> m (Maybe a)
     doReadDuct tvar = withWaiter tvar $ handleBlock preblock postblock
         where
             preblock :: Waiter m -> STM m (WouldBlock (Maybe a))
-            preblock waiter = do
+            preblock waiter = runStatusM tvar $ do
                 -- Are we even open?  If not, return Nothing.
-                withOpen tvar (Complete Nothing) $ do
+                ifM isClosed (pure (Complete Nothing)) $ do
                     getInLine readers waiter $ do
                         -- Look the contents of the duct.
                         cnts :: Contents a <- viewM contents
@@ -525,36 +549,38 @@ module Data.Conduit.Parallel.Internal.Duct(
 
             postblock :: Waiter m -> STM m (Maybe a)
             postblock waiter = 
-                -- Make sure we are still open
-                withOpen tvar Nothing $ do
-                    -- wait to be woken up.
-                    waitForWaiter readers waiter (Open, Nothing) $ do
-                        -- Get the contents
-                        cnts :: Contents a <- viewM contents
-                        case cnts of
-                            Empty  ->
-                                -- We should not have been woken up
-                                -- if the duct is empty.
-                                error $ "readDuct woken up on "
-                                        ++ "empty duct."
-                            Full a -> do
-                                -- The duct is not empty.  Empty it.
-                                emptyContents (Just a)
+                -- wait to be woken up.
+                waitForWaiter waiter Nothing $ do
+                    runStatusM tvar $ do
+                        -- Make sure we are still open
+                        ifM isClosed (pure Nothing) $ do
+                            -- remove us from the queue
+                            removeHead readers
+                            -- Get the contents
+                            cnts :: Contents a <- viewM contents
+                            case cnts of
+                                Empty  ->
+                                    -- We should not have been woken up
+                                    -- if the duct is empty.
+                                    error $ "readDuct woken up on "
+                                            ++ "empty duct."
+                                Full a -> do
+                                    -- The duct is not empty.  Empty it.
+                                    emptyContents (Just a)
 
-            emptyContents :: forall r . r -> StatusM m a (Open, r)
+            emptyContents :: forall r . r -> StatusM m a r
             emptyContents r = do
                                 -- The duct is not empty.  If we are closing,
                                 -- close the duct.  Otherwise, empty the
                                 -- contents, then return the value.
                                 ifM (viewM closing)
-                                    (pure (Closed, r))
-                                    $ do
-                                        setContents Empty
-                                        pure (Open, r)
+                                    closeStatusM
+                                    $ setContents Empty
+                                pure r
 
     doCloseReadDuct :: forall a m .
                         MonadConc m
-                        => TVar (STM m) (IsClosed (Status m a))
+                        => StatusTVar m a
                         -> m (Maybe a)
     doCloseReadDuct tvar = atomically $ do
         ms :: IsClosed (Status m a) <- readTVar tvar
@@ -570,28 +596,26 @@ module Data.Conduit.Parallel.Internal.Duct(
 
     doWriteDuct :: forall a m .
                     MonadConc m
-                    => TVar (STM m) (IsClosed (Status m a))
+                    => StatusTVar m a
                     -> a
                     -> m Open
     doWriteDuct tvar val = withWaiter tvar $ handleBlock preblock postBlock
         where
             preblock :: Waiter m -> STM m (WouldBlock Open)
-            preblock waiter = do
+            preblock waiter = runStatusM tvar $ do
                 -- Are we even open?  If not, return Closed.
-                withOpen tvar (Complete Closed) $ do
+                ifM isClosed (pure (Complete Closed)) $ do
                     -- Note: we can be closed for writing, even if we're
                     -- still open for reading.
-                    ifM (viewM closing)
-                        (pure (Open, (Complete Closed)))
-                        $ do
-                            getInLine writers waiter $ do
+                    ifM (viewM closing) (pure (Complete Closed)) $ do
+                        getInLine writers waiter $ do
                             -- Look the contents of the duct.
                             cnts :: Contents a <- viewM contents
                             case cnts of
                                 Empty  -> do
                                     -- The duct is empty.  Fill it.
                                     setContents (Full val)
-                                    pure (Open, Complete Open)
+                                    pure (Complete Open)
                                 Full _ -> do
                                     -- The duct is not empty.  Block until
                                     -- it is.
@@ -599,22 +623,18 @@ module Data.Conduit.Parallel.Internal.Duct(
 
             postBlock :: Waiter m -> STM m Open
             postBlock waiter = 
-                -- Make sure we are still open
-                withOpen tvar Closed $ do
-                    -- wait to be woken up.
-                    waitForWaiter writers waiter (Closed, Closed) $ do
-                        ifM (viewM closing)
-                            -- Note: if the closing variable is True, we're
-                            -- still open for reading.  So this is correct,
-                            -- as weird as it looks.
-                            (pure (Open, Closed))
-                            $ do
+                waitForWaiter waiter Closed $ do
+                    runStatusM tvar $ do
+                        -- Make sure we are still open
+                        ifM isClosed (pure Closed) $ do
+                            ifM (viewM closing) (pure Closed) $ do
+                                removeHead writers
                                 -- Get the contents
                                 cnts :: Contents a <- viewM contents
                                 case cnts of
                                     Empty  -> do
                                         setContents (Full val)
-                                        pure (Open, Open)
+                                        pure Open
                                     Full _ -> do
                                         -- We should not have been woken up
                                         -- if the duct is full.
@@ -624,14 +644,14 @@ module Data.Conduit.Parallel.Internal.Duct(
 
     doCloseWriteDuct :: forall a m .
                             MonadConc m
-                            => TVar (STM m) (IsClosed (Status m a))
+                            => StatusTVar m a
                             -> m ()
     doCloseWriteDuct tvar = atomically $ do
         ms :: IsClosed (Status m a) <- readTVar tvar
         case ms of
             IsClosed -> pure ()
             IsOpen s -> do
-                case (view contents s) of
+                case view contents s of
                     Empty -> do
                         writeTVar tvar IsClosed
                         closeAll (view readers s)
@@ -644,7 +664,7 @@ module Data.Conduit.Parallel.Internal.Duct(
 
     makeDuct :: forall a m .
                     MonadConc m
-                    => TVar (STM m) (IsClosed (Status m a))
+                    => StatusTVar m a
                     -> (ReadDuct m a, WriteDuct m a)
     makeDuct tvar = (rd, wd)
         where
@@ -656,6 +676,7 @@ module Data.Conduit.Parallel.Internal.Duct(
             wd = WriteDuct {
                     writeDuct = doWriteDuct tvar,
                     closeWriteDuct = doCloseWriteDuct tvar }
+    {-# INLINE makeDuct #-}
 
     makeStatus :: forall a m . Contents a -> IsClosed (Status m a)
     makeStatus r = IsOpen $
@@ -664,6 +685,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                             swriters = mempty,
                             sclosing = False,
                             scontents = r }
+    {-# INLINE makeStatus #-}
 
     newDuct :: forall a m . MonadConc m => m (ReadDuct m a, WriteDuct m a)
     newDuct = makeDuct <$> newTVarConc (makeStatus Empty) 
@@ -685,6 +707,6 @@ module Data.Conduit.Parallel.Internal.Duct(
                     closeReadDuct = pure Nothing }
             wd :: WriteDuct m a
             wd = WriteDuct {
-                    writeDuct = (\_ -> pure Closed),
+                    writeDuct = \_ -> pure Closed,
                     closeWriteDuct = pure () }
 

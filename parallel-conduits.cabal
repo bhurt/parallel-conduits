@@ -29,12 +29,12 @@ library
                         -- , deepseq
                         , exceptions
                         -- , kan-extensions
-                        , lifted-base
-                        , monad-control
+                        -- , lifted-base
+                        -- , monad-control
                         , mtl
                         -- , profunctors
                         -- , selective
-                        , stm
+                        -- , stm
                         -- , these
                         -- , transformers
                         -- , unliftio
