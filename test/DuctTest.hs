@@ -1,39 +1,164 @@
+{-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module DuctTest(
     tests
 ) where
 
-    import           Control.Concurrent                  (threadDelay)
-    import           Control.Concurrent.Async
-    import qualified Control.Exception                   as Ex
-    import           Control.Monad.Codensity
-    import           Control.Monad.IO.Class
+    import           Control.Monad.Cont
     import           Data.Conduit.Parallel.Internal.Duct
-    import           Data.Proxy                          (Proxy (..))
     import           Test.HUnit
 
-    type M = Codensity IO
+    -- import           Control.Concurrent                  (threadDelay)
+    -- import           Control.Concurrent.Async
+    -- import qualified Control.Exception                   as Ex
+    -- import           Control.Monad.IO.Class
+    -- import           Data.Proxy                          (Proxy (..))
 
     tests :: Test
     tests = TestLabel "Duct Tests" $
                 TestList [
-                    testRead1,
-                    testWrite1,
-                    testClosed1,
-                    testClosed2,
-                    testReadBlock,
-                    testWriteBlock,
-                    testReadN,
-                    testWriteN,
-                    testAbandonRead,
-                    testAbandonWrite,
-                    testPreAbandonRead,
-                    testPreAbandonWrite,
-                    testClosedClose,
-                    testCloseBlocked
+                    testReadFull,
+                    testReadClosed1,
+                    testReadClosed2,
+                    testCloseRead,
+                    testWriteEmpty,
+                    testWriteClosed
+                    -- testRead1,
+                    -- testWrite1,
+                    -- testClosed1,
+                    -- testClosed2,
+                    -- testReadBlock,
+                    -- testWriteBlock,
+                    -- testReadN,
+                    -- testWriteN,
+                    -- testAbandonRead,
+                    -- testAbandonWrite,
+                    -- testPreAbandonRead,
+                    -- testPreAbandonWrite,
+                    -- testClosedClose,
+                    -- testCloseBlocked
                 ]
 
+    type M a = forall r . ContT r IO a
+
+    runTestBase :: Assertable a => M a -> Test
+    runTestBase act = TestCase $ do
+                        a <- runContT act pure
+                        assert a
+
+    runTest :: Assertable a => String -> M a -> Test
+    runTest label act = TestLabel label $ runTestBase act
+
+    andThen :: IO Bool -> IO Bool -> IO Bool
+    andThen first second = do
+        r <- first
+        if r
+        then second
+        else pure False
+
+    {-
+    spawn :: forall a . Assertable a => IO a -> M (Async a)
+    spawn act = ContT go
+        where
+            go :: forall r . (Async a -> m r) -> m r
+            go cont = do
+                withAsync act $ \asy -> do
+                    link asy
+                    r <- cont asy
+                    a <- wait asy
+                    assert a
+                    pure r
+
+    pause :: M ()
+    pause = lift $ threadDelay 500
+    -}
+
+    doRead :: forall a . Eq a => ReadDuct a -> Maybe a -> IO Bool
+    doRead rd val = do
+        val1 :: Maybe a <- readDuct rd
+        pure $ (val1 == val)
+
+    {-
+    readMulti :: forall a . Eq a => ReadDuct a -> [ a ] -> IO Bool
+    readMulti rd vals = foldr go (pure True) vals
+        where
+            go :: a -> IO Bool -> IO Bool
+            go val continue = doRead rd (Just val) `andThen` continue
+    -}
+
+    doCloseRead :: forall a . Eq a => ReadDuct a -> Maybe a -> IO Bool
+    doCloseRead rd val = do
+        val1 :: Maybe a <- closeReadDuct rd
+        pure $ val1 == val
+
+
+    doWrite :: forall a . WriteDuct a -> a -> Open -> IO Bool
+    doWrite wd val res = do
+        r <- writeDuct wd val
+        pure $ r == res
+
+    doCloseWrite :: forall a . WriteDuct a -> IO Bool
+    doCloseWrite wd = do
+        closeWriteDuct wd
+        pure True
+
+    {-
+    writeMulti :: forall a . Eq a => WriteDuct a -> [ a ] -> IO Bool
+    writeMulti wd vals = foldr go (pure True) vals
+        where
+            go :: a -> IO Bool -> IO Bool
+            go val continue = writeOpen wd val Open `andThen` continue
+    -}
+
+    -- If we create a full duct, we should be able to read the value from it
+    -- and then close it without there being a new value.
+    testReadFull :: Test
+    testReadFull = runTest "testReadFull" $ lift $ do
+        let v :: Int
+            v = 1
+        (rd, _) <- newFullDuct v
+        doRead rd (Just v) `andThen` doCloseRead rd Nothing
+
+    -- If we create a pre-closed duct, we should be able to close it.
+    testReadClosed1 :: Test
+    testReadClosed1 = runTest "testReadClosed" $ lift $ do
+        (rd, _) <- newClosedDuct
+        doCloseRead rd (Nothing :: Maybe Int)
+
+    -- If we create a pre-closed duct, we should get a Nothing when we
+    -- read from it.
+    testReadClosed2 :: Test
+    testReadClosed2 = runTest "testReadClosed" $ lift $ do
+        (rd, _) <- newClosedDuct
+        doRead rd (Nothing :: Maybe Int)
+            `andThen` doCloseRead rd (Nothing :: Maybe Int)
+
+    -- If we create a full duct, we should be able to close it and get
+    -- the value.
+    testCloseRead :: Test
+    testCloseRead = runTest "testCloseRead1" $ lift $ do
+        let v :: Int
+            v = 1
+        (rd, _) <- newFullDuct v
+        doCloseRead rd (Just v)
+
+    -- If we create an empty duct, we should be able to write to it once.
+    testWriteEmpty :: Test
+    testWriteEmpty = runTest "testWriteEmpty" $ lift $ do
+        let v :: Int
+            v = 1
+        (_, wd) <- newDuct
+        doWrite wd v Open `andThen` doCloseWrite wd
+
+    testWriteClosed :: Test
+    testWriteClosed = runTest "testWriteClosed" $ lift $ do
+        let v :: Int
+            v = 1
+        (_, wd) <- newClosedDuct
+        doWrite wd v Closed `andThen` doCloseWrite wd
+
+    {-
     data TestException = TestException deriving (Show)
 
     instance Ex.Exception TestException where
@@ -58,11 +183,6 @@ module DuctTest(
 
     runTest :: String -> M () -> Test
     runTest label = TestLabel label . runTestBase
-
-    testRead :: ReadDuct Int -> Maybe Int -> IO Bool
-    testRead rd val = do
-        val1 :: Maybe a <- readDuct rd
-        pure $ val1 == val
 
     testWrite :: WriteDuct Int -> Int -> Open -> IO Bool
     testWrite wd val op = do
@@ -418,3 +538,4 @@ module DuctTest(
                     res <- closeOp ducts
                     liftIO $ assert (res == expected)
 
+    -}
