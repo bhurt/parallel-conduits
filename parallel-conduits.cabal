@@ -12,6 +12,7 @@ category:            Web
 build-type:          Simple
 extra-source-files:  README.md
 cabal-version:       >=1.10
+extra-doc-files:     docs/fuse.svg
 
 Flag Devel
     Description:       Development build (enable warnings and less optimization)
@@ -21,20 +22,19 @@ library
   hs-source-dirs:      src
   exposed-modules:     Data.Conduit.Parallel
                         , Data.Conduit.Parallel.Internal.Duct
+                        , Data.Conduit.Parallel.Internal.Fuse
+                        , Data.Conduit.Parallel.Internal.Run
+                        , Data.Conduit.Parallel.Internal.Type
   build-depends:       base >= 4.7 && < 5
-                        , concurrency
-                        -- , conduit
                         , containers
-                        -- , contravariant
-                        -- , deepseq
-                        , exceptions
-                        -- , kan-extensions
+                        , mtl
+                        , stm
+                        , profunctors
+                        , deepseq
+                        -- , conduit
                         -- , lifted-base
                         -- , monad-control
-                        , mtl
-                        -- , profunctors
                         -- , selective
-                        -- , stm
                         -- , these
                         -- , transformers
                         -- , unliftio
@@ -64,12 +64,12 @@ test-suite parallel-haskell-testsuite
     other-modules:      DuctTest
     hs-source-dirs:     test
     build-depends:      base >= 4.7 && < 5
-                        , async
+                        , HUnit
+                        , mtl
+                        , parallel-conduits
+                        -- , async
                         -- , conduit
                         -- , deepseq
-                        , HUnit
-                        , kan-extensions
-                        , parallel-conduits
                         -- , profunctors
                         -- , random
                         -- , these

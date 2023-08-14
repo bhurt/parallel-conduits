@@ -12,6 +12,10 @@
 -- Maintainer  : bhurt42@gmail.com
 -- Stability   : experimental
 --
+-- Try 1:
+--
+-- ![image Try 1](docs/fuse.svg)
+--
 -- = Warning
 --
 -- This is an internal module of the Parallel Conduits.  You almost
@@ -53,7 +57,8 @@ module Data.Conduit.Parallel.Internal.Duct(
     closeReadDuct,
     closeWriteDuct,
     readDuct,
-    writeDuct
+    writeDuct,
+    contramapIO
 ) where
 
     import           Control.Concurrent.STM
@@ -651,4 +656,10 @@ module Data.Conduit.Parallel.Internal.Duct(
             wd = WriteDuct {
                     writeDuct = const (pure Closed),
                     closeWriteDuct = pure () }
+
+    contramapIO :: forall a b .
+                    (a -> IO b)
+                    -> WriteDuct b
+                    -> WriteDuct a
+    contramapIO f wd = wd { writeDuct = f >=> writeDuct wd }
 
