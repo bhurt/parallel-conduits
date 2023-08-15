@@ -32,6 +32,6 @@ module Data.Conduit.Parallel.Internal.Run (
     runParConduit pc = do
         (rd, wd) <- liftIO $ Duct.newClosedDuct
         let wd' = contramap absurd wd
-        Cont.runContT (getParConduit pc rd wd') pure
+        Cont.runContT (getParConduit pc rd wd') id
 
 

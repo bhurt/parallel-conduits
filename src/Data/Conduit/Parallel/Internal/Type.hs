@@ -32,7 +32,7 @@ module Data.Conduit.Parallel.Internal.Type (
                                         forall x .
                                         Duct.ReadDuct i
                                         -> Duct.WriteDuct o
-                                        -> ContT x m r }
+                                        -> ContT x m (m r) }
 
     instance Functor (ParConduit m r i) where
         fmap f c = ParConduit $

@@ -44,13 +44,13 @@ module Data.Conduit.Parallel.Internal.Fuse (
             go :: forall t .
                     Duct.ReadDuct i
                     -> Duct.WriteDuct o
-                    -> ContT t m r
+                    -> ContT t m (m r)
             go rd wd = do
                 (xrd, xwd) <- liftIO $ Duct.newDuct
                 let xwd' = Duct.contramapIO (evaluate . force) xwd
                 r1 <- getParConduit pc1 rd xwd'
                 r2 <- getParConduit pc2 xrd wd
-                pure $ fixr r1 r2
+                pure $ fixr <$> r1 <*> r2
 
 
     fuse :: forall r m i o x .
