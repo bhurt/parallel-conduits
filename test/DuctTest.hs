@@ -5,12 +5,12 @@ module DuctTest(
     tests
 ) where
 
+    import           Control.Concurrent                  (threadDelay)
+    import           Control.Concurrent.Async
     import           Control.Monad.Cont
     import           Data.Conduit.Parallel.Internal.Duct
     import           Test.HUnit
 
-    -- import           Control.Concurrent                  (threadDelay)
-    -- import           Control.Concurrent.Async
     -- import qualified Control.Exception                   as Ex
     -- import           Control.Monad.IO.Class
     -- import           Data.Proxy                          (Proxy (..))
@@ -21,9 +21,16 @@ module DuctTest(
                     testReadFull,
                     testReadClosed1,
                     testReadClosed2,
+                    testReadClosed3,
+                    testReadClosed4,
                     testCloseRead,
                     testWriteEmpty,
-                    testWriteClosed
+                    testWriteClosed1,
+                    testWriteClosed2,
+                    testWriteClosed3,
+                    testReadBlocks,
+                    testReadQueues,
+                    testWriteBlocks
                     -- testRead1,
                     -- testWrite1,
                     -- testClosed1,
@@ -57,22 +64,20 @@ module DuctTest(
         then second
         else pure False
 
-    {-
     spawn :: forall a . Assertable a => IO a -> M (Async a)
     spawn act = ContT go
         where
-            go :: forall r . (Async a -> m r) -> m r
-            go cont = do
+            go :: forall r . (Async a -> IO r) -> IO r
+            go f = do
                 withAsync act $ \asy -> do
                     link asy
-                    r <- cont asy
+                    r <- f asy
                     a <- wait asy
                     assert a
                     pure r
 
     pause :: M ()
     pause = lift $ threadDelay 500
-    -}
 
     doRead :: forall a . Eq a => ReadDuct a -> Maybe a -> IO Bool
     doRead rd val = do
@@ -122,17 +127,31 @@ module DuctTest(
 
     -- If we create a pre-closed duct, we should be able to close it.
     testReadClosed1 :: Test
-    testReadClosed1 = runTest "testReadClosed" $ lift $ do
+    testReadClosed1 = runTest "testReadClosed1" $ lift $ do
         (rd, _) <- newClosedDuct
         doCloseRead rd (Nothing :: Maybe Int)
 
     -- If we create a pre-closed duct, we should get a Nothing when we
     -- read from it.
     testReadClosed2 :: Test
-    testReadClosed2 = runTest "testReadClosed" $ lift $ do
+    testReadClosed2 = runTest "testReadClosed2" $ lift $ do
         (rd, _) <- newClosedDuct
         doRead rd (Nothing :: Maybe Int)
             `andThen` doCloseRead rd (Nothing :: Maybe Int)
+
+    -- If we create a full duct and close it, we should get a Nothing
+    -- when we read from it.
+    testReadClosed3 :: Test
+    testReadClosed3 = runTest "testReadClosed3" $ lift $ do
+        (rd, _) <- newFullDuct (1 :: Int)
+        doCloseRead rd (Just 1) `andThen` doRead rd Nothing
+
+    -- If we create an empty duct and close it, we should get a Nothing
+    -- when we read from it.
+    testReadClosed4 :: Test
+    testReadClosed4 = runTest "testReadClosed4" $ lift $ do
+        (rd, _) <- newDuct
+        doCloseRead rd (Nothing :: Maybe Int) `andThen` doRead rd Nothing
 
     -- If we create a full duct, we should be able to close it and get
     -- the value.
@@ -151,12 +170,88 @@ module DuctTest(
         (_, wd) <- newDuct
         doWrite wd v Open `andThen` doCloseWrite wd
 
-    testWriteClosed :: Test
-    testWriteClosed = runTest "testWriteClosed" $ lift $ do
+    testWriteClosed1 :: Test
+    testWriteClosed1 = runTest "testWriteClosed1" $ lift $ do
         let v :: Int
             v = 1
         (_, wd) <- newClosedDuct
         doWrite wd v Closed `andThen` doCloseWrite wd
+
+    testWriteClosed2 :: Test
+    testWriteClosed2 = runTest "testWriteClosed2" $ lift $ do
+        (_, wd) <- newFullDuct (1 :: Int)
+        doCloseWrite wd `andThen` doWrite wd 1 Closed
+
+    testWriteClosed3 :: Test
+    testWriteClosed3 = runTest "testWriteClosed3" $ lift $ do
+        (_, wd) <- newDuct
+        doCloseWrite wd `andThen` doWrite wd (1 :: Int) Closed
+
+    testReadBlocks :: Test
+    testReadBlocks = runTest "testReadBlocks" $ do
+            (rd, wd) <- lift $ newDuct
+            rasy <- spawn $ readSide rd
+            pause
+            wasy <- spawn $ writeSide wd
+            rres <- lift $ wait rasy
+            wres <- lift $ wait wasy
+            pure $ rres && wres
+        where
+            readSide :: ReadDuct Int -> IO Bool
+            readSide rd = doRead rd (Just 1) `andThen` doCloseRead rd Nothing
+
+            writeSide :: WriteDuct Int -> IO Bool
+            writeSide wd = doWrite wd 1 Open `andThen` doCloseWrite wd
+
+    testReadQueues :: Test
+    testReadQueues = runTest "testReadQueues" $ do
+            (rd, wd) <- lift $ newDuct
+            rasy1 <- spawn $ readSide rd 1
+            pause
+            rasy2 <- spawn $ readSide rd 2
+            pause
+            rasy3 <- spawn $ readSide rd 3
+            pause
+            wasy <- spawn $ writeSide wd
+            pause
+            rres1 <- lift $ wait rasy1
+            rres2 <- lift $ wait rasy2
+            rres3 <- lift $ wait rasy3
+            wres <- lift $ wait wasy
+            pure $ rres1 && rres2 && rres3 && wres
+        where
+            readSide :: ReadDuct Int -> Int -> IO Bool
+            readSide rd v = doRead rd (Just v)
+
+            writeSide :: WriteDuct Int -> IO Bool
+            writeSide wd =
+                doWrite wd 1 Open
+                `andThen` doWrite wd 2 Open
+                `andThen` doWrite wd 3 Open
+
+
+    testWriteBlocks :: Test
+    testWriteBlocks = runTest " testWriteBlocks" $ do
+            (rd, wd) <- lift $ newDuct
+            wasy <- spawn $ writeSide wd
+            pause
+            rasy <- spawn $ readSide rd
+            wres <- lift $ wait wasy
+            rres <- lift $ wait rasy
+            pure $ rres && wres
+        where
+            readSide :: ReadDuct Int -> IO Bool
+            readSide rd = doRead rd (Just 1)
+                            `andThen` doRead rd (Just 2)
+                            `andThen` doCloseRead rd Nothing
+
+            writeSide :: WriteDuct Int -> IO Bool
+            writeSide wd = doWrite wd 1 Open
+                        `andThen` doWrite wd 2 Open
+                        `andThen` doCloseWrite wd
+
+
+
 
     {-
     data TestException = TestException deriving (Show)
