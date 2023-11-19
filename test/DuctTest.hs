@@ -5,14 +5,16 @@ module DuctTest(
     tests
 ) where
 
-    import           Control.Concurrent                  (threadDelay)
     import           Control.Concurrent.Async
+    import qualified Control.Concurrent.MVar             as MVar
     import           Control.Monad.Cont
+    import           Control.Monad.Except
+    import           Control.Monad.State
     import           Data.Conduit.Parallel.Internal.Duct
+    import           Data.IORef
     import           Test.HUnit
 
     -- import qualified Control.Exception                   as Ex
-    -- import           Control.Monad.IO.Class
     -- import           Data.Proxy                          (Proxy (..))
 
     tests :: Test
@@ -28,9 +30,9 @@ module DuctTest(
                     testWriteClosed1,
                     testWriteClosed2,
                     testWriteClosed3,
-                    testReadBlocks,
-                    testReadQueues,
-                    testWriteBlocks
+                    testReadBlocks -- ,
+                    -- testReadQueues,
+                    -- testWriteBlocks
                     -- testRead1,
                     -- testWrite1,
                     -- testClosed1,
@@ -47,162 +49,297 @@ module DuctTest(
                     -- testCloseBlocked
                 ]
 
-    type M a = forall r . ContT r IO a
+    -- | The monad we run tests in.
+    --
+    -- This is just the ContT monad, allowing us to chain our withAsync
+    -- calls, and clean up all the spawned threads when we're done with
+    -- the test.
+    --
+    -- A common test will look like:
+    --
+    -- @
+    --    myTest :: Test
+    --    myTest = runTestM "MyTest" $ do
+    --          v <- liftIO $ ...
+    --          r1 <- waitForBlock $ spawn $ thread1 v
+    --          r2 <- noWaitForBlock $ spawn $ thread2 v
+    --          pure $ r1 && r2
+    --      where
+    --          thread1 :: whatever -> ThreadM Bool
+    --          thread1 = ...
+    --
+    --          thread2 :: whatever -> ThreadM Bool
+    --          thread2 = ...
+    -- @
+    --
+    type TestM a = forall r . ContT r IO a
 
-    runTestBase :: Assertable a => M a -> Test
-    runTestBase act = TestCase $ do
+    -- | The monad we run in test threads
+    --
+    -- This allows us to short-circuit on a failed test, and
+    -- have an option action to perform when the thread will
+    -- block.
+    --
+    type ThreadM a = ExceptT Bool (StateT (Maybe (IO ())) IO) a
+
+    -- | Create a Test from a TestM
+    --
+    -- This does not create a label for the test, and is occassionally
+    -- useful.
+    runTestMBase :: Assertable a => TestM a -> Test
+    runTestMBase act = TestCase $ do
                         a <- runContT act pure
                         assert a
 
-    runTest :: Assertable a => String -> M a -> Test
-    runTest label act = TestLabel label $ runTestBase act
+    -- | Create a Test from a TestM with a label.
+    --
+    -- We generally want to label our individual tests.
+    --
+    runTestM :: Assertable a => String -> TestM a -> Test
+    runTestM label act = TestLabel label $ runTestMBase act
 
-    andThen :: IO Bool -> IO Bool -> IO Bool
-    andThen first second = do
-        r <- first
-        if r
-        then second
-        else pure False
+    -- | Create a test that only needs a single thread.
+    --
+    -- Note that the thread can not block.
+    --
+    runSingleThread :: String -> ThreadM () -> Test
+    runSingleThread label act =
+        TestLabel label $ TestCase $ do
+            let act1 :: StateT (Maybe (IO ())) IO (Either Bool ())
+                act1 = runExceptT act
 
-    spawn :: forall a . Assertable a => IO a -> M (Async a)
-    spawn act = ContT go
+                act2 :: IO (Either Bool ())
+                act2 = evalStateT act1 Nothing
+
+            ebu :: Either Bool () <- act2
+            case ebu of
+                Left b   -> assert b
+                Right () -> assert True
+
+    -- | Wait for a block before continuing.
+    --
+    -- This function is intended to wrap `spawn`, causing the `TestM`
+    -- code to wait for the newly spawned thread to block before
+    -- continuing.
+    waitForBlock :: (Maybe (IO ()) -> TestM a) -> TestM a
+    waitForBlock go = do
+        mvar <- liftIO $ MVar.newEmptyMVar
+        r <- go (Just (MVar.putMVar mvar ()))
+        _ <- liftIO $ MVar.takeMVar mvar
+        pure r
+
+    -- | Do not wait for a block before continuing.
+    --
+    -- Like `waitForBlock`, this function is intended to wrap `spawn`.
+    -- But unlike the aforementioned function, this function does not
+    -- wait for a block before continuing.  It is used for test threads
+    -- which do not block.
+    --
+    noWaitForBlock :: (Maybe (IO ()) -> TestM a) -> TestM a
+    noWaitForBlock spwn = spwn Nothing
+
+    -- | Spawn a test thread (run a `ThreadM` monad).
+    --
+    -- This function is intended to be wrapped with either
+    -- `waitForBlock` or `noWaitForBlock`.  It spawns a new
+    -- thread, and runs the `ThreadM` monad in it.
+    --
+    spawn :: ThreadM () -> Maybe (IO ()) -> TestM (Async Bool)
+    spawn act onBlock = ContT go
         where
-            go :: forall r . (Async a -> IO r) -> IO r
+            go :: forall r . (Async Bool -> IO r) -> IO r
             go f = do
-                withAsync act $ \asy -> do
+                withAsync (runThreadM act onBlock) $ \asy -> do
                     link asy
                     r <- f asy
                     a <- wait asy
                     assert a
                     pure r
 
-    pause :: M ()
-    pause = lift $ threadDelay 500
+            runThreadM :: ThreadM () -> Maybe (IO ()) -> IO Bool
+            runThreadM a onBlck = do
+                let a1 :: StateT (Maybe (IO ())) IO (Either Bool ())
+                    a1 = runExceptT a
 
-    doRead :: forall a . Eq a => ReadDuct a -> Maybe a -> IO Bool
+                    a2 :: IO (Either Bool (), Maybe (IO ()))
+                    a2 = runStateT a1 onBlck
+
+                (ebb, doneBlock) :: (Either Bool (), Maybe (IO ())) <- a2
+
+                -- Ensure the onBlock action has been performed.
+                case doneBlock of
+                    Nothing   -> pure ()
+                    Just blck -> blck
+
+                pure $ case ebb of
+                            Left  b -> b
+                            Right () -> True
+
+
+    -- | Lift an IO action taking a onBlock value to a `ThreadM`.
+    --
+    -- This is intended to be used by `doRead` and `doWrite`.  If
+    -- the underlying IO action doesn't need or use the onBlock
+    -- action, then just use liftIO.
+    withBlock :: forall a . (Maybe (IO ()) -> IO a) -> ThreadM a
+    withBlock op = do
+            s <- get
+            case s of
+                Nothing      -> liftIO $ op Nothing
+                Just onBlck -> do
+                    (r, s2) <- liftIO $ do
+                        ref <- newIORef (Just onBlck)
+                        r <- op (Just (updateRef ref))
+                        s2 <- readIORef ref
+                        pure (r, s2)
+                    put s2
+                    pure r
+        where
+            updateRef :: IORef (Maybe (IO ())) -> IO ()
+            updateRef ref = do
+                s3 <- readIORef ref
+                case s3 of
+                    Nothing -> pure ()
+                    Just ob -> do
+                        ob
+                        writeIORef ref Nothing
+
+
+    {-
+    -- | Fake a block (executing the onBlock action if one exists).
+    --
+    -- Not sure if this is useful or not.
+    pseudoBlock :: ThreadM ()
+    pseudoBlock = do
+        s <- get
+        case s of
+            Nothing -> pure ()
+            Just op -> do
+                liftIO op
+                set Nothing
+    -}
+
+    -- | Pseudo-assert for ThreadM.
+    attest :: Bool -> ThreadM ()
+    attest False = throwError False
+    attest True  = pure ()
+
+    doRead :: forall a . Eq a => ReadDuct a -> Maybe a -> ThreadM ()
     doRead rd val = do
-        val1 :: Maybe a <- readDuct rd
-        pure $ (val1 == val)
+        val1 :: Maybe a <- withBlock $ readDuct rd
+        attest $ (val1 == val)
 
-    {-
-    readMulti :: forall a . Eq a => ReadDuct a -> [ a ] -> IO Bool
-    readMulti rd vals = foldr go (pure True) vals
-        where
-            go :: a -> IO Bool -> IO Bool
-            go val continue = doRead rd (Just val) `andThen` continue
-    -}
-
-    doCloseRead :: forall a . Eq a => ReadDuct a -> Maybe a -> IO Bool
+    doCloseRead :: forall a . Eq a => ReadDuct a -> Maybe a -> ThreadM ()
     doCloseRead rd val = do
-        val1 :: Maybe a <- closeReadDuct rd
-        pure $ val1 == val
+        val1 :: Maybe a <- liftIO $ closeReadDuct rd
+        attest $ val1 == val
 
-
-    doWrite :: forall a . WriteDuct a -> a -> Open -> IO Bool
+    doWrite :: forall a . WriteDuct a -> a -> Open -> ThreadM ()
     doWrite wd val res = do
-        r <- writeDuct wd val
-        pure $ r == res
+        r <- withBlock $ \onBlock -> writeDuct wd onBlock val
+        attest $ r == res
 
-    doCloseWrite :: forall a . WriteDuct a -> IO Bool
-    doCloseWrite wd = do
-        closeWriteDuct wd
-        pure True
-
-    {-
-    writeMulti :: forall a . Eq a => WriteDuct a -> [ a ] -> IO Bool
-    writeMulti wd vals = foldr go (pure True) vals
-        where
-            go :: a -> IO Bool -> IO Bool
-            go val continue = writeOpen wd val Open `andThen` continue
-    -}
+    doCloseWrite :: forall a . WriteDuct a -> ThreadM ()
+    doCloseWrite wd = liftIO $ closeWriteDuct wd
 
     -- If we create a full duct, we should be able to read the value from it
     -- and then close it without there being a new value.
     testReadFull :: Test
-    testReadFull = runTest "testReadFull" $ lift $ do
+    testReadFull = runSingleThread "testReadFull" $ do
         let v :: Int
             v = 1
-        (rd, _) <- newFullDuct v
-        doRead rd (Just v) `andThen` doCloseRead rd Nothing
+        (rd, _) <- liftIO $ newFullDuct v
+        doRead rd (Just v)
+        doCloseRead rd Nothing
 
     -- If we create a pre-closed duct, we should be able to close it.
     testReadClosed1 :: Test
-    testReadClosed1 = runTest "testReadClosed1" $ lift $ do
-        (rd, _) <- newClosedDuct
+    testReadClosed1 = runSingleThread "testReadClosed1" $ do
+        (rd, _) <- liftIO $ newClosedDuct
         doCloseRead rd (Nothing :: Maybe Int)
 
     -- If we create a pre-closed duct, we should get a Nothing when we
     -- read from it.
     testReadClosed2 :: Test
-    testReadClosed2 = runTest "testReadClosed2" $ lift $ do
-        (rd, _) <- newClosedDuct
+    testReadClosed2 = runSingleThread "testReadClosed2" $ do
+        (rd, _) <- liftIO $ newClosedDuct
         doRead rd (Nothing :: Maybe Int)
-            `andThen` doCloseRead rd (Nothing :: Maybe Int)
+        doCloseRead rd (Nothing :: Maybe Int)
 
     -- If we create a full duct and close it, we should get a Nothing
     -- when we read from it.
     testReadClosed3 :: Test
-    testReadClosed3 = runTest "testReadClosed3" $ lift $ do
-        (rd, _) <- newFullDuct (1 :: Int)
-        doCloseRead rd (Just 1) `andThen` doRead rd Nothing
+    testReadClosed3 = runSingleThread "testReadClosed3" $ do
+        (rd, _) <- liftIO $ newFullDuct (1 :: Int)
+        doCloseRead rd (Just 1)
+        doRead rd Nothing
 
     -- If we create an empty duct and close it, we should get a Nothing
     -- when we read from it.
     testReadClosed4 :: Test
-    testReadClosed4 = runTest "testReadClosed4" $ lift $ do
-        (rd, _) <- newDuct
-        doCloseRead rd (Nothing :: Maybe Int) `andThen` doRead rd Nothing
+    testReadClosed4 = runSingleThread "testReadClosed4" $ do
+        (rd, _) <- liftIO $ newDuct
+        doCloseRead rd (Nothing :: Maybe Int)
+        doRead rd Nothing
 
     -- If we create a full duct, we should be able to close it and get
     -- the value.
     testCloseRead :: Test
-    testCloseRead = runTest "testCloseRead1" $ lift $ do
+    testCloseRead = runSingleThread "testCloseRead1" $ do
         let v :: Int
             v = 1
-        (rd, _) <- newFullDuct v
+        (rd, _) <- liftIO $ newFullDuct v
         doCloseRead rd (Just v)
 
     -- If we create an empty duct, we should be able to write to it once.
     testWriteEmpty :: Test
-    testWriteEmpty = runTest "testWriteEmpty" $ lift $ do
+    testWriteEmpty = runSingleThread "testWriteEmpty" $ do
         let v :: Int
             v = 1
-        (_, wd) <- newDuct
-        doWrite wd v Open `andThen` doCloseWrite wd
+        (_, wd) <- liftIO $ newDuct
+        doWrite wd v Open
+        doCloseWrite wd
 
     testWriteClosed1 :: Test
-    testWriteClosed1 = runTest "testWriteClosed1" $ lift $ do
+    testWriteClosed1 = runSingleThread "testWriteClosed1" $ do
         let v :: Int
             v = 1
-        (_, wd) <- newClosedDuct
-        doWrite wd v Closed `andThen` doCloseWrite wd
+        (_, wd) <- liftIO $ newClosedDuct
+        doWrite wd v Closed
+        doCloseWrite wd
 
     testWriteClosed2 :: Test
-    testWriteClosed2 = runTest "testWriteClosed2" $ lift $ do
-        (_, wd) <- newFullDuct (1 :: Int)
-        doCloseWrite wd `andThen` doWrite wd 1 Closed
+    testWriteClosed2 = runSingleThread "testWriteClosed2" $ do
+        (_, wd) <- liftIO $ newFullDuct (1 :: Int)
+        doCloseWrite wd
+        doWrite wd 1 Closed
 
     testWriteClosed3 :: Test
-    testWriteClosed3 = runTest "testWriteClosed3" $ lift $ do
-        (_, wd) <- newDuct
-        doCloseWrite wd `andThen` doWrite wd (1 :: Int) Closed
+    testWriteClosed3 = runSingleThread "testWriteClosed3" $ do
+        (_, wd) <- liftIO $ newDuct
+        doCloseWrite wd
+        doWrite wd (1 :: Int) Closed
 
     testReadBlocks :: Test
-    testReadBlocks = runTest "testReadBlocks" $ do
-            (rd, wd) <- lift $ newDuct
-            rasy <- spawn $ readSide rd
-            pause
-            wasy <- spawn $ writeSide wd
+    testReadBlocks = runTestM "testReadBlocks" $ do
+            (rd, wd) <- liftIO $ newDuct
+            rasy <- waitForBlock $ spawn $ readSide rd
+            wasy <- noWaitForBlock $ spawn $ writeSide wd
             rres <- lift $ wait rasy
             wres <- lift $ wait wasy
             pure $ rres && wres
         where
-            readSide :: ReadDuct Int -> IO Bool
-            readSide rd = doRead rd (Just 1) `andThen` doCloseRead rd Nothing
+            readSide :: ReadDuct Int -> ThreadM ()
+            readSide rd = do
+                doRead rd (Just 1)
+                doCloseRead rd Nothing
 
-            writeSide :: WriteDuct Int -> IO Bool
-            writeSide wd = doWrite wd 1 Open `andThen` doCloseWrite wd
+            writeSide :: WriteDuct Int -> ThreadM ()
+            writeSide wd = do
+                doWrite wd 1 Open
+                doCloseWrite wd
 
+    {-
     testReadQueues :: Test
     testReadQueues = runTest "testReadQueues" $ do
             (rd, wd) <- lift $ newDuct
@@ -253,7 +390,6 @@ module DuctTest(
 
 
 
-    {-
     data TestException = TestException deriving (Show)
 
     instance Ex.Exception TestException where
@@ -404,7 +540,7 @@ module DuctTest(
     testAbandonWrite :: Test
     testAbandonWrite = runTest "testAbandonWrite" $ do
         -- Like testAbandonRead, we spawn two writes, then force the
-        -- first write to throw an exception.  A read should then 
+        -- first write to throw an exception.  A read should then
         -- be satisified by the second write.
         (rd, wd) <- liftIO $ newFullDuct 1
         asy1 <- spawnTest $ testEx $ testWrite wd 2 Open
@@ -470,7 +606,7 @@ module DuctTest(
             createFull = TestLabel "Duct initially full" $
                             pickClosed (doTest (Just 1) (newFullDuct 1)) True
 
-            pickClosed :: 
+            pickClosed ::
                 (Maybe ((Ducts -> M (Maybe Int)),
                             Maybe (Ducts -> M (Maybe Int)))
                     -> Test)
@@ -479,7 +615,7 @@ module DuctTest(
             pickClosed cont needAClose =
                     TestList $ go <$> (if needAClose
                                         then closeOpts
-                                        else 
+                                        else
                                             -- Add the "no closes" option
                                             -- to the list.
                                             (("No closes", Nothing)
@@ -489,9 +625,9 @@ module DuctTest(
                                         Maybe (Ducts -> M (Maybe Int))))
                             -> Test
                     go (lbl, closes) = TestLabel lbl $ cont closes
-                
 
-            closeOpts :: [ (String, 
+
+            closeOpts :: [ (String,
                                 Maybe ((Ducts -> M (Maybe Int)),
                                         Maybe (Ducts -> M (Maybe Int)))) ]
             closeOpts = [
@@ -588,7 +724,7 @@ module DuctTest(
                     closeRead :: Test
                     closeRead = pickNumBlocks $ cont $
                                     \(rd, _) -> liftIO $ closeReadDuct rd
-                                
+
                     closeWrite :: Test
                     closeWrite = pickNumBlocks $ cont $
                                     \(_, wd) -> liftIO $ closeWriteDuct wd

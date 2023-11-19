@@ -25,7 +25,7 @@
 -- is for internal use only, and will change or disappear without
 -- notice.  Use at your own risk.
 --
--- = Purpose
+-- = Introduction
 --
 -- This module implements Ducts (aka Closable MVars).  A duct is a one
 -- element channel between two threads.  It works much like an MVar does,
@@ -186,6 +186,37 @@ module Data.Conduit.Parallel.Internal.Duct(
     -- wrong order (values put after the given value have been taken
     -- before).  The solution is to have a thread remove itself from
     -- the queue, and remove or add the value to the Duct.
+    --
+    -- ** Closing
+    --
+    -- The fact that the duct can hold a value causes some interesting
+    -- consequences for closing the duct: what do you do when you are
+    -- closing a duct holding a value?  Closing the read end is easy-
+    -- doing a close implicitly does a non-blocking read.  If the duct
+    -- is holding a value, closing the read end returns the value.  The
+    -- closing code is then responsible for handling that last value.
+    -- It can discard it or handle it however, as it chooses.
+    --
+    -- Closing the write end of the duct is somewhat more compilicated.
+    -- You can't return the value on the write.  In addition to the
+    -- writting code not knowing how to properly handle the last value,
+    -- the writing code may not even know the true type of the duct.
+    -- The write end may have had `contramap` called on it, so the
+    -- writer is sending values of type a, but the last value in the
+    -- duct is of type b.
+    --
+    -- The solution for this is to have two different sorts of "closed"
+    -- the duct can be.  If the duct is fully closed, this means that
+    -- both reads and writes will fail.  This is the normal definition
+    -- of closed.  But a duct can also be only write-closed.  With a
+    -- write-closed duct, writes will fail, but reads will still
+    -- succeed.  Closing the read end of a duct will always fully close
+    -- the duct (returning the last element if it exists).  If the
+    -- duct is empty when the write end is closed, then the duct will
+    -- be fully closed.  But if the duct contains an element when the
+    -- write end is closed, the duct will be only write-closed.  The
+    -- next read will succeed, and in doing so fully close the duct.
+    --
 
     -- | Boolean-analog for whether the Duct is open or closed.
     --
@@ -236,33 +267,32 @@ module Data.Conduit.Parallel.Internal.Duct(
         | Empty
 
     -- | The current state of a Duct.
-    --
+    data Status a = Status {
+                        sReadersQueue :: Seq Waiter,
+                        sWritersQueue :: Seq Waiter,
+                        sWriteClosed :: Bool,
+                        sContents :: Contents a }
     -- This used to be called the State, but then I wanted to use a StateT
     -- transformer, and the name clash caused sadness in the compiler.  So
     -- it got renamed.
-    data Status a = Status {
-                        sreaders :: Seq Waiter,
-                        swriters :: Seq Waiter,
-                        sclosing :: Bool,
-                        scontents :: Contents a }
 
     -- | The read endpoint of a duct.
     data ReadDuct a = ReadDuct { 
-                            readDuct :: IO (Maybe a),
+                            readDuct :: Maybe (IO ()) -> IO (Maybe a),
                             closeReadDuct :: IO (Maybe a) }
 
     instance Functor ReadDuct where
         fmap f rd = ReadDuct {
-                        readDuct = fmap f <$> readDuct rd,
+                        readDuct = \mr -> fmap f <$> readDuct rd mr,
                         closeReadDuct = fmap f <$> closeReadDuct rd }
 
     -- | The write endpoint of a duct.
     data WriteDuct a = WriteDuct {
-                            writeDuct :: a -> IO Open,
+                            writeDuct :: Maybe (IO ()) -> a -> IO Open,
                             closeWriteDuct :: IO () }
 
     instance Contravariant WriteDuct where
-        contramap f wd = wd { writeDuct = writeDuct wd . f }
+        contramap f wd = wd { writeDuct = \mr -> writeDuct wd mr . f }
 
     -- | Maybe-analog for whether an operation has completed or would block.
     data WouldBlock a =
@@ -274,10 +304,19 @@ module Data.Conduit.Parallel.Internal.Duct(
         IsOpen a
         | IsClosed
 
+    -- | TVar type holding a status (and is maybe closed).
     type StatusTVar a = TVar (IsClosed (Status a))
 
+    -- | Monad for updating the Status.
+    --
+    -- It simplifies the code to move the duct status into a StateT
+    -- transformer, rather than have readTVars and writeTvars all
+    -- over the place.
+    --
+    -- Note that the base monad of this status is STM, not IO!
     type StatusM a = StateT (IsClosed (Status a)) STM
 
+    -- | Test if the duct is closed.
     isClosed :: forall a . StatusM a Bool
     isClosed = do
         s <- get
@@ -285,31 +324,47 @@ module Data.Conduit.Parallel.Internal.Duct(
                 IsClosed -> True
                 IsOpen _ -> False
 
+    -- | A Redneck lens.
+    --
+    -- Using lenses here cleans up the code, but I don't want to depend
+    -- on the real lens library.  So it's time to break out the duct tape
+    -- and bailing wire for things that move and shouldn't, and a hammer
+    -- and WD40 for thats that don't move and should.
+    --
     data SLens a x = SLens {
         view :: Status a -> x,
         update :: x -> Status a -> Status a
     }
 
+    -- | Lens to access the readers queue.
     readers :: forall a . SLens a (Seq Waiter)
     readers = SLens {
-                view = sreaders,
-                update = \x s -> s { sreaders = x } }
+                view = sReadersQueue,
+                update = \x s -> s { sReadersQueue = x } }
 
+    -- | Lens to access the writers queue.
     writers :: forall a . SLens a (Seq Waiter)
     writers = SLens {
-                view = swriters,
-                update = \x s -> s { swriters = x } }
+                view = sWritersQueue,
+                update = \x s -> s { sWritersQueue = x } }
 
+    -- | Lens to access the current contents of the duct.
     contents :: forall a . SLens a (Contents a)
     contents = SLens {
-                    view = scontents,
-                    update = \x s -> s { scontents = x } }
+                    view = sContents,
+                    update = \x s -> s { sContents = x } }
 
-    closing :: forall a . SLens a Bool
-    closing = SLens {
-                    view = sclosing,
-                    update = \x s -> s { sclosing = x } }
+    -- | Lens to test if the duct is write closed.
+    writeClosed :: forall a . SLens a Bool
+    writeClosed = SLens {
+                    view = sWriteClosed,
+                    update = \x s -> s { sWriteClosed = x } }
 
+    -- | Read the given lens on the current duct State.
+    --
+    -- This is a combination of view (the lens) and get (the state).
+    --
+    -- This fails is the duct is fully closed.
     viewM :: SLens a x -> StatusM a x
     viewM lens = do
         r <- get
@@ -317,27 +372,49 @@ module Data.Conduit.Parallel.Internal.Duct(
             IsClosed -> error "viewM on closed duct!"
             IsOpen s -> pure $ view lens s
 
+    -- | Write the given lens on the current duct State.
+    --
+    -- This is a combination of update (the lens) and modify (the state).
+    --
+    -- If the duct is fully closed, this is a no-op.
+    --
     give :: SLens a x -> x -> StatusM a ()
     give lens val =
         modify (\case
                     IsClosed -> IsClosed
                     IsOpen s -> IsOpen $ update lens val s)
 
+    -- | Apply a given function to the value focued on by the lens in the
+    -- current State.
+    --
+    -- This is a combination of update and view (for the lens) and
+    -- modify (for the state).
+    --
+    -- If the duct is fully closed, this is a no-op.
     mutate :: SLens a x -> (x -> x) -> StatusM a ()
     mutate lens f =
         modify (\case
                     IsClosed -> IsClosed
                     IsOpen s -> IsOpen $ update lens (f (view lens s)) s)
 
+    -- | Force the duct to be fully closed.
     closeStatusM :: StatusM a ()
     closeStatusM = put IsClosed
 
+    -- | Add a waiter to a given queue (lens).
     addWaiter :: forall a .
                     SLens a (Seq Waiter)
                     -> Waiter
                     -> StatusM a ()
     addWaiter lens w = mutate lens (Seq.|> w)
 
+    -- | Get the head element of a given waiter queue.
+    --
+    -- This will discard waiters that this function discards waiters
+    -- that have been abandoned.
+    --
+    -- Returns Nothing if the queue is empty (or all the waiters in the
+    -- queue were abandoned).  Otherwise returns Just the head waiter.
     getQueueHead :: forall a .
                         SLens a (Seq Waiter)
                         -> StatusM a (Maybe Waiter)
@@ -364,6 +441,10 @@ module Data.Conduit.Parallel.Internal.Duct(
             saveQueue True  q = give queue q
 
 
+    -- | Awake the head waiter in the given queue.
+    --
+    -- If there are no non-abandoned waiters in the queue (i.e.
+    -- `getQueueHead` returns Nothing), then no waiter is woken up.
     awaken :: forall a .  SLens a (Seq Waiter) -> StatusM a ()
     awaken q = do
         r <- getQueueHead q
@@ -371,9 +452,16 @@ module Data.Conduit.Parallel.Internal.Duct(
             Nothing -> pure ()
             Just w  -> lift $ writeTVar (waiterTVar w) Awoken
 
+    -- | Remove the first waiter in the queue.
+    --
+    -- Note, this function does NOT discard abandoned waiters.  The
+    -- assumption is we are removing ourselves from the queue, and thus
+    -- are not abandoned.
+    --
     removeHead :: forall a .
                     SLens a (Seq Waiter)
-                    -> Waiter
+                    -> Waiter   -- ^ The waiter we expect to be the
+                                -- first element.
                     -> StatusM a ()
     removeHead queue me = do
         q :: Seq Waiter <- viewM queue
@@ -384,6 +472,11 @@ module Data.Conduit.Parallel.Internal.Duct(
                     give queue ws
                     pure ()
 
+    -- | An if where the test and both branches are monads.
+    --
+    -- Mildly suprised this doesn't already exist.  I may have just
+    -- missed it.
+    --
     ifM :: forall m a . Monad m => m Bool -> m a -> m a -> m a
     ifM testM thenM elseM = do
         t <- testM
@@ -391,6 +484,9 @@ module Data.Conduit.Parallel.Internal.Duct(
         then thenM
         else elseM
 
+    -- | Create a waiter, and clean up after.
+    --
+    -- 
     withWaiter :: forall a b .
                     StatusTVar b
                     -> (Waiter -> IO a)
@@ -410,7 +506,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                             cnts <- viewM contents
                             case cnts of
                                 Full _ -> awaken readers
-                                Empty  -> ifM (viewM closing)
+                                Empty  -> ifM (viewM writeClosed)
                                             (pure ()) 
                                             (awaken writers)
 
@@ -450,25 +546,36 @@ module Data.Conduit.Parallel.Internal.Duct(
                 -- Nope, no other waiters ahead of us.
                 act
 
-    waitForWaiter :: forall x .  Waiter -> x -> STM x -> STM x
+    waitForWaiter :: forall x . 
+                        Waiter
+                        -> x
+                        -> STM x
+                        -> STM x
     waitForWaiter waiter onClosed act = do
         ws :: WaiterStatus <- readTVar (waiterTVar waiter)
         case ws of
-            Waiting   -> retry          -- Block
+            Waiting   ->
+                -- Block
+                retry
             Abandoned -> pure onClosed
             Closing   -> pure onClosed
             Awoken    -> act
 
     handleBlock :: forall x .
-                    (Waiter -> STM (WouldBlock x))
+                    Maybe (IO ())
+                    -> (Waiter -> STM (WouldBlock x))
                     -> (Waiter -> STM x)
                     -> Waiter
                     -> IO x
-    handleBlock preblock postblock waiter = do
+    handleBlock onBlock preblock postblock waiter = do
         r <- atomically $ preblock waiter
         case r of
             Complete x -> pure x
-            WouldBlock -> atomically $ postblock waiter
+            WouldBlock -> do
+                case onBlock of
+                    Nothing -> pure ()
+                    Just act -> act
+                atomically $ postblock waiter
 
     setContents :: forall a .
                     Contents a
@@ -487,9 +594,10 @@ module Data.Conduit.Parallel.Internal.Duct(
 
     doReadDuct :: forall a .
                     StatusTVar a
+                    -> Maybe (IO ())
                     -> IO (Maybe a)
-    doReadDuct tvar = withWaiter tvar $
-                                handleBlock preblock postblock
+    doReadDuct tvar onBlock = withWaiter tvar $
+                                handleBlock onBlock preblock postblock
         where
             preblock :: Waiter -> STM (WouldBlock (Maybe a))
             preblock waiter = runStatusM tvar $ do
@@ -532,7 +640,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                                 -- The duct is not empty.  If we are closing,
                                 -- close the duct.  Otherwise, empty the
                                 -- contents, then return the value.
-                                ifM (viewM closing)
+                                ifM (viewM writeClosed)
                                     closeStatusM
                                     $ setContents Empty
                                 pure r
@@ -554,10 +662,11 @@ module Data.Conduit.Parallel.Internal.Duct(
 
     doWriteDuct :: forall a .
                     StatusTVar a
+                    -> Maybe (IO ())
                     -> a
                     -> IO Open
-    doWriteDuct tvar val = withWaiter tvar $
-                                    handleBlock preblock postblock
+    doWriteDuct tvar onBlock val = withWaiter tvar $
+                                    handleBlock onBlock preblock postblock
         where
             preblock :: Waiter -> STM (WouldBlock Open)
             preblock waiter = runStatusM tvar $ do
@@ -565,7 +674,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                 ifM isClosed (pure (Complete Closed)) $ do
                     -- Note: we can be closed for writing, even if we're
                     -- still open for reading.
-                    ifM (viewM closing) (pure (Complete Closed)) $ do
+                    ifM (viewM writeClosed) (pure (Complete Closed)) $ do
                         getInLine writers waiter $ do
                             -- Look the contents of the duct.
                             cnts :: Contents a <- viewM contents
@@ -586,7 +695,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                     runStatusM tvar $ do
                         -- Make sure we are still open
                         ifM isClosed (pure Closed) $ do
-                            ifM (viewM closing) (pure Closed) $ do
+                            ifM (viewM writeClosed) (pure Closed) $ do
                                 removeHead writers waiter
                                 -- Get the contents
                                 cnts :: Contents a <- viewM contents
@@ -614,7 +723,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                         closeAll (view writers s)
                     Full _ -> do
                         let s2 = update writers Seq.empty s
-                            s3 = update closing True s2
+                            s3 = update writeClosed True s2
                         writeTVar tvar (IsOpen s3)
                         closeAll (view writers s)
 
@@ -633,10 +742,10 @@ module Data.Conduit.Parallel.Internal.Duct(
     makeStatus :: forall a . Contents a -> IsClosed (Status a)
     makeStatus r = IsOpen $
                         Status {
-                            sreaders = mempty,
-                            swriters = mempty,
-                            sclosing = False,
-                            scontents = r }
+                            sReadersQueue = mempty,
+                            sWritersQueue = mempty,
+                            sWriteClosed = False,
+                            sContents = r }
 
     newDuct :: forall a .  IO (ReadDuct a, WriteDuct a)
     newDuct = makeDuct <$> newTVarIO (makeStatus Empty) 
@@ -650,16 +759,16 @@ module Data.Conduit.Parallel.Internal.Duct(
         where
             rd :: ReadDuct a
             rd = ReadDuct {
-                    readDuct = pure Nothing,
+                    readDuct = \_ -> pure Nothing,
                     closeReadDuct = pure Nothing }
             wd :: WriteDuct a
             wd = WriteDuct {
-                    writeDuct = const (pure Closed),
+                    writeDuct = \_ -> const (pure Closed),
                     closeWriteDuct = pure () }
 
     contramapIO :: forall a b .
                     (a -> IO b)
                     -> WriteDuct b
                     -> WriteDuct a
-    contramapIO f wd = wd { writeDuct = f >=> writeDuct wd }
+    contramapIO f wd = wd { writeDuct = \mr -> f >=> writeDuct wd mr }
 

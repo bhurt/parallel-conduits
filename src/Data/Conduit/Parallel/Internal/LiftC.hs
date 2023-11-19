@@ -66,7 +66,7 @@ module Data.Conduit.Parallel.Internal.LiftC (
 
             readConduit :: Duct.ReadDuct i -> C.ConduitT () i m ()
             readConduit rd = do
-                x <- liftIO $ Duct.readDuct rd
+                x <- liftIO $ Duct.readDuct rd Nothing
                 case x of
                     Just v -> do
                         C.yield v
@@ -78,7 +78,7 @@ module Data.Conduit.Parallel.Internal.LiftC (
                 x <- C.await
                 case x of
                     Just v  -> do
-                        open <- liftIO $ Duct.writeDuct wd v
+                        open <- liftIO $ Duct.writeDuct wd Nothing v
                         case open of
                             Duct.Open   -> writeConduit wd
                             Duct.Closed -> pure ()
