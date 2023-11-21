@@ -68,6 +68,7 @@ test-suite parallel-haskell-testsuite
     build-depends:      base >= 4.7 && < 5
                         , async
                         , HUnit
+                        , lifted-base
                         , mtl
                         , parallel-conduits
                         -- , conduit

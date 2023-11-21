@@ -45,7 +45,7 @@
 -- mutable variables the way MVars do, we deviate from the MVar API.
 -- Instead of take and put, you read and write.  And instead of having
 -- a single Duct type, we have two endpoints, a ReadDuct endpoint (that
--- can be read from) and a WriteDuct endpoint.
+-- can be read from) and a WriteDuct endpoint (that can be written to).
 --
 module Data.Conduit.Parallel.Internal.Duct(
     Open(..),
@@ -69,6 +69,16 @@ module Data.Conduit.Parallel.Internal.Duct(
     import qualified Data.Sequence              as Seq
     import           GHC.Generics               (Generic)
 
+    -- So, a word of warning before we dig in.  Yeah, this module is
+    -- documented.  Probably over-documented.  But here's the thing:
+    -- this is the core module for this whole library.  If this doesn't
+    -- work, nothing works- and it probably fails in hard to debug ways.
+    -- So we document very heavily.  And use types as much as possible
+    -- to gaurantee correctness.  And break things up into simple chunks,
+    -- depending upon the compiler to re-integrate them and optimize them.
+    -- And have a bunch of unit tests.  It's a case of belt *and* suspenders,
+    -- and duct tape and super glue and staples and ...
+    --
     -- **********************************************************************
     -- **                                                                  **
     -- **                      Developer's Commentary                      **

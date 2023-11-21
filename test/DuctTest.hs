@@ -7,15 +7,13 @@ module DuctTest(
 
     import           Control.Concurrent.Async
     import qualified Control.Concurrent.MVar             as MVar
+    import qualified Control.Exception.Lifted            as Ex
     import           Control.Monad.Cont
     import           Control.Monad.Except
     import           Control.Monad.State
     import           Data.Conduit.Parallel.Internal.Duct
     import           Data.IORef
     import           Test.HUnit
-
-    -- import qualified Control.Exception                   as Ex
-    -- import           Data.Proxy                          (Proxy (..))
 
     tests :: Test
     tests = TestLabel "Duct Tests" $
@@ -30,23 +28,16 @@ module DuctTest(
                     testWriteClosed1,
                     testWriteClosed2,
                     testWriteClosed3,
-                    testReadBlocks -- ,
-                    -- testReadQueues,
-                    -- testWriteBlocks
-                    -- testRead1,
-                    -- testWrite1,
-                    -- testClosed1,
-                    -- testClosed2,
-                    -- testReadBlock,
-                    -- testWriteBlock,
-                    -- testReadN,
-                    -- testWriteN,
-                    -- testAbandonRead,
-                    -- testAbandonWrite,
-                    -- testPreAbandonRead,
-                    -- testPreAbandonWrite,
-                    -- testClosedClose,
-                    -- testCloseBlocked
+                    testReadBlocks,
+                    testReadQueues,
+                    testWriteBlocks,
+                    testWriteQueues, 
+                    testAbandonRead,
+                    testAbandonWrite,
+                    testCloseReads1,
+                    testCloseReads2,
+                    testCloseWrites1,
+                    testCloseWrites2
                 ]
 
     -- | The monad we run tests in.
@@ -81,6 +72,11 @@ module DuctTest(
     -- block.
     --
     type ThreadM a = ExceptT Bool (StateT (Maybe (IO ())) IO) a
+
+    -- | A known exception we can throw at threads.
+    data TestException = TestException deriving (Show)
+
+    instance Ex.Exception TestException where
 
     -- | Create a Test from a TestM
     --
@@ -224,23 +220,47 @@ module DuctTest(
     attest False = throwError False
     attest True  = pure ()
 
+    -- | Do a read.
+    --
+    -- This lifts a `readDuct` call up into a ThreadM, and compares
+    -- the result it gets to an expected value.
     doRead :: forall a . Eq a => ReadDuct a -> Maybe a -> ThreadM ()
     doRead rd val = do
         val1 :: Maybe a <- withBlock $ readDuct rd
         attest $ (val1 == val)
 
+    -- | Close a read duct.
+    --
+    -- This lifts a `closeReadDuct` up into a ThreadM, and compares
+    -- the result it gets to an expected value.
     doCloseRead :: forall a . Eq a => ReadDuct a -> Maybe a -> ThreadM ()
     doCloseRead rd val = do
         val1 :: Maybe a <- liftIO $ closeReadDuct rd
         attest $ val1 == val
 
+    -- | Do a write.
+    --
+    -- This lifts  a `writeDuct` up into a ThreadM, and compares
+    -- the result it gets to an expected value.
     doWrite :: forall a . WriteDuct a -> a -> Open -> ThreadM ()
     doWrite wd val res = do
         r <- withBlock $ \onBlock -> writeDuct wd onBlock val
         attest $ r == res
 
+    -- | Close a write duct.
+    --
+    -- This lifts a `closeWriteDuct` up into a ThreadM.  Note that becase
+    -- closeWriteDuct does not return a value, no comparison of the result
+    -- is done.
     doCloseWrite :: forall a . WriteDuct a -> ThreadM ()
     doCloseWrite wd = liftIO $ closeWriteDuct wd
+
+    throwException :: forall a . Async a -> TestM ()
+    throwException asy = liftIO $ cancelWith asy TestException
+
+    expectException :: ThreadM () -> ThreadM ()
+    expectException act =
+        Ex.catch (act >> attest False) (\TestException -> pure ())
 
     -- If we create a full duct, we should be able to read the value from it
     -- and then close it without there being a new value.
@@ -300,6 +320,7 @@ module DuctTest(
         doWrite wd v Open
         doCloseWrite wd
 
+    -- If we create a closed duct, a write should fail.
     testWriteClosed1 :: Test
     testWriteClosed1 = runSingleThread "testWriteClosed1" $ do
         let v :: Int
@@ -308,12 +329,16 @@ module DuctTest(
         doWrite wd v Closed
         doCloseWrite wd
 
+    -- If we close a full duct and close the write side, then a write
+    -- should fail.
     testWriteClosed2 :: Test
     testWriteClosed2 = runSingleThread "testWriteClosed2" $ do
         (_, wd) <- liftIO $ newFullDuct (1 :: Int)
         doCloseWrite wd
         doWrite wd 1 Closed
 
+    -- If we create an empty duct and close the write side, then a
+    -- write should fail.
     testWriteClosed3 :: Test
     testWriteClosed3 = runSingleThread "testWriteClosed3" $ do
         (_, wd) <- liftIO $ newDuct
@@ -323,11 +348,9 @@ module DuctTest(
     testReadBlocks :: Test
     testReadBlocks = runTestM "testReadBlocks" $ do
             (rd, wd) <- liftIO $ newDuct
-            rasy <- waitForBlock $ spawn $ readSide rd
-            wasy <- noWaitForBlock $ spawn $ writeSide wd
-            rres <- lift $ wait rasy
-            wres <- lift $ wait wasy
-            pure $ rres && wres
+            _ <- waitForBlock $ spawn $ readSide rd
+            _ <- noWaitForBlock $ spawn $ writeSide wd
+            pure ()
         where
             readSide :: ReadDuct Int -> ThreadM ()
             readSide rd = do
@@ -339,434 +362,166 @@ module DuctTest(
                 doWrite wd 1 Open
                 doCloseWrite wd
 
-    {-
     testReadQueues :: Test
-    testReadQueues = runTest "testReadQueues" $ do
+    testReadQueues = runTestM "testReadQueues" $ do
             (rd, wd) <- lift $ newDuct
-            rasy1 <- spawn $ readSide rd 1
-            pause
-            rasy2 <- spawn $ readSide rd 2
-            pause
-            rasy3 <- spawn $ readSide rd 3
-            pause
-            wasy <- spawn $ writeSide wd
-            pause
-            rres1 <- lift $ wait rasy1
-            rres2 <- lift $ wait rasy2
-            rres3 <- lift $ wait rasy3
-            wres <- lift $ wait wasy
-            pure $ rres1 && rres2 && rres3 && wres
+            _ <- waitForBlock $ spawn $ readSide rd 1
+            _ <- waitForBlock $ spawn $ readSide rd 2
+            _ <- waitForBlock $ spawn $ readSide rd 3
+            _ <- noWaitForBlock $ spawn $ writeSide wd
+            pure ()
         where
-            readSide :: ReadDuct Int -> Int -> IO Bool
+            readSide :: ReadDuct Int -> Int -> ThreadM ()
             readSide rd v = doRead rd (Just v)
 
-            writeSide :: WriteDuct Int -> IO Bool
-            writeSide wd =
+            writeSide :: WriteDuct Int -> ThreadM ()
+            writeSide wd = do
                 doWrite wd 1 Open
-                `andThen` doWrite wd 2 Open
-                `andThen` doWrite wd 3 Open
-
+                doWrite wd 2 Open
+                doWrite wd 3 Open
 
     testWriteBlocks :: Test
-    testWriteBlocks = runTest " testWriteBlocks" $ do
-            (rd, wd) <- lift $ newDuct
-            wasy <- spawn $ writeSide wd
-            pause
-            rasy <- spawn $ readSide rd
-            wres <- lift $ wait wasy
-            rres <- lift $ wait rasy
-            pure $ rres && wres
+    testWriteBlocks = runTestM "testWriteBlocks" $ do
+            (rd, wd) <- lift $ newFullDuct (1 :: Int)
+            _ <- waitForBlock $ spawn $ writeSide wd
+            _ <- noWaitForBlock $ spawn $ readSide rd
+            pure ()
+
         where
-            readSide :: ReadDuct Int -> IO Bool
-            readSide rd = doRead rd (Just 1)
-                            `andThen` doRead rd (Just 2)
-                            `andThen` doCloseRead rd Nothing
+            readSide :: ReadDuct Int -> ThreadM ()
+            readSide rd = do
+                doRead rd (Just 1)
+                doRead rd (Just 2)
+                doCloseRead rd Nothing
 
-            writeSide :: WriteDuct Int -> IO Bool
-            writeSide wd = doWrite wd 1 Open
-                        `andThen` doWrite wd 2 Open
-                        `andThen` doCloseWrite wd
+            writeSide :: WriteDuct Int -> ThreadM ()
+            writeSide wd = do
+                doWrite wd 2 Open
+                doCloseWrite wd
 
 
+    testWriteQueues :: Test
+    testWriteQueues = runTestM "testWriteQueues" $ do
+            (rd, wd) <- lift $ newFullDuct (1 :: Int)
+            _ <- waitForBlock $ spawn $ writeSide wd 2
+            _ <- waitForBlock $ spawn $ writeSide wd 3
+            _ <- waitForBlock $ spawn $ writeSide wd 4
+            _ <- noWaitForBlock $ spawn $ readSide rd
+            pure ()
 
-
-    data TestException = TestException deriving (Show)
-
-    instance Ex.Exception TestException where
-
-    spawnTest :: IO Bool -> M (Async Bool)
-    spawnTest act = Codensity go
         where
-            go :: forall b . (Async Bool -> IO b) -> IO b
-            go cont = do
-                withAsync act $ \asy -> do
-                    link asy
-                    b <- cont asy
-                    r <- wait asy
-                    assert r
-                    pure b
+            readSide :: ReadDuct Int -> ThreadM ()
+            readSide rd = do
+                doRead rd (Just 1)
+                doRead rd (Just 2)
+                doRead rd (Just 3)
+                doRead rd (Just 4)
+                doCloseRead rd Nothing
 
-    pause :: M ()
-    pause = liftIO $ threadDelay 500
+            writeSide :: WriteDuct Int -> Int -> ThreadM ()
+            writeSide wd x = do
+                doWrite wd x Open
 
-    runTestBase :: M () -> Test
-    runTestBase act = TestCase $ runCodensity act pure
-
-    runTest :: String -> M () -> Test
-    runTest label = TestLabel label . runTestBase
-
-    testWrite :: WriteDuct Int -> Int -> Open -> IO Bool
-    testWrite wd val op = do
-        op2 :: Open <- writeDuct wd val
-        pure $ op == op2
-
-    testExWith :: forall e . Ex.Exception e => Proxy e -> IO Bool -> IO Bool
-    testExWith Proxy act = (act >> pure False) `Ex.catch` handler
-        where
-            handler :: e -> IO Bool
-            handler _ = pure True
-
-    testEx :: IO Bool -> IO Bool
-    testEx = testExWith (Proxy :: Proxy TestException)
-
-    cancelTest :: Async Bool -> M ()
-    cancelTest asy = liftIO $ cancelWith asy TestException
-
-    testRead1 :: Test
-    testRead1 = runTest "testRead1" $ do
-                    -- A read on a full duct always succeeds
-                    (rd, _) <- liftIO $ newFullDuct 1
-                    _ <- spawnTest $ testRead rd (Just 1)
-                    pure ()
-
-    testWrite1 :: Test
-    testWrite1 = runTest "testWrite1" $ do
-                    -- A write on an empty duct always succeeds
-                    (_, wd) <- liftIO $ newDuct
-                    _ <- spawnTest $ testWrite wd 1 Open
-                    pure ()
-
-    testClosed1 :: Test
-    testClosed1 = runTest "testClosed1" $ do
-                    -- A read on a closed duct always fails.
-                    (rd, _) <- liftIO $ newClosedDuct
-                    _ <- spawnTest $ testRead rd Nothing
-                    pure ()
-
-    testClosed2 :: Test
-    testClosed2 = runTest "testClosed1" $ do
-                    -- A write on a closed duct always fails.
-                    (_, wd) <- liftIO $ newClosedDuct
-                    _ <- spawnTest $ testWrite wd 1 Closed
-                    pure ()
-
-    testReadBlock :: Test
-    testReadBlock = runTest "testReadBlock" $ do
-                        -- A read on an empty duct blocks until a write
-                        (rd, wd) <- liftIO $ newDuct
-                        _ <- spawnTest $ testRead rd (Just 1)
-                        pause
-                        _ <- spawnTest $ testWrite wd 1 Open
-                        pure ()
-
-    testWriteBlock :: Test
-    testWriteBlock = runTest "testWriteBlock" $ do
-                        -- a write on a full duct blocks until a read
-                        (rd, wd) <- liftIO $ newFullDuct 1
-                        _ <- spawnTest $ testWrite wd 2 Open
-                        pause
-                        _ <- spawnTest $ testRead rd (Just 1)
-                        pause
-                        _ <- spawnTest $ testRead rd (Just 2)
-                        pure ()
-
-    testReadN :: Test
-    testReadN = TestLabel "testReadN" $ TestList $ makeTest <$> [ 2 .. 7 ]
-        where
-            -- We cue up N reads, then do N writes, and make sure everything
-            -- happens in order.
-            makeTest :: Int -> Test
-            makeTest n = runTest ("testRead" ++ show n) $ do
-                (rd, wd) <- liftIO $ newDuct
-                mapM_ (spawnRead rd) [ 1 .. n ]
-                mapM_ (spawnWrite wd) [ 1 .. n ]
-
-            spawnRead :: ReadDuct Int -> Int -> M ()
-            spawnRead rd i = do
-                _ <- spawnTest $ testRead rd (Just i)
-                pause
-
-            spawnWrite :: WriteDuct Int -> Int -> M ()
-            spawnWrite wd i = do
-                _ <- spawnTest $ testWrite wd i Open
-                pause
-
-    testWriteN :: Test
-    testWriteN = TestLabel "testWriteN" $ TestList $ makeTest <$> [ 2 .. 7 ]
-        where
-            -- We cue up N writes, then do N reads and make sure everything
-            -- happens in the correct order.
-            makeTest :: Int -> Test
-            makeTest n = runTest ("testWrite" ++ show n) $ do
-                (rd, wd) <- liftIO $ newFullDuct 1
-                mapM_ (spawnWrite wd) [ 2 .. (n+1) ]
-                mapM_ (spawnRead rd) [ 1 .. (n+1) ]
-
-            spawnRead :: ReadDuct Int -> Int -> M ()
-            spawnRead rd i = do
-                _ <- spawnTest $ testRead rd (Just i)
-                pause
-
-            spawnWrite :: WriteDuct Int -> Int -> M ()
-            spawnWrite wd i = do
-                _ <- spawnTest $ testWrite wd i Open
-                pause
 
     testAbandonRead :: Test
-    testAbandonRead = runTest "testAbandonRead" $ do
-        -- We spawn two reads, then cause the first read to abort by
-        -- throwing an exception.  A single write then should satisfy
-        -- the second read.
-        (rd, wd) <- liftIO $ newDuct
-        asy1 <- spawnTest $ testEx $ testRead rd (Just 0)
-        pause
-        _ <- spawnTest $ testRead rd (Just 1)
-        pause
-        cancelTest asy1
-        pause
-        _ <- spawnTest $ testWrite wd 1 Open
-        pure ()
+    testAbandonRead = runTestM "testAbandonRead" $ do
+            (rd, wd) <- lift $ newDuct
+            a1 <- waitForBlock $ spawn $ exceptSide rd 1
+            a2 <- waitForBlock $ spawn $ exceptSide rd 2
+            _ <- waitForBlock $ spawn $ readSide rd 3
+            throwException a1
+            throwException a2
+            _ <- noWaitForBlock $ spawn $ writeSide wd
+            pure ()
+        where
+            exceptSide :: ReadDuct Int -> Int -> ThreadM ()
+            exceptSide rd v =
+                expectException $ doRead rd (Just v)
+
+            readSide :: ReadDuct Int -> Int -> ThreadM ()
+            readSide rd v = doRead rd (Just v)
+
+            writeSide :: WriteDuct Int -> ThreadM ()
+            writeSide wd = do
+                doWrite wd 3 Open
 
     testAbandonWrite :: Test
-    testAbandonWrite = runTest "testAbandonWrite" $ do
-        -- Like testAbandonRead, we spawn two writes, then force the
-        -- first write to throw an exception.  A read should then
-        -- be satisified by the second write.
-        (rd, wd) <- liftIO $ newFullDuct 1
-        asy1 <- spawnTest $ testEx $ testWrite wd 2 Open
-        pause
-        _ <- spawnTest $ testWrite wd 3 Open
-        pause
-        cancelTest asy1
-        -- We need to read the value the duct was created with
-        _ <- spawnTest $ testRead rd (Just 1)
-        pause
-        -- And then we see the second value written.
-        _ <- spawnTest $ testRead rd (Just 3)
-        pure ()
+    testAbandonWrite = runTestM "testAbandonWrite" $ do
+            (rd, wd) <- lift $ newFullDuct (1 :: Int)
+            a1 <- waitForBlock $ spawn $ exceptSide wd 2
+            a2 <- waitForBlock $ spawn $ exceptSide wd 3
+            _ <- waitForBlock $ spawn $ writeSide wd 4
+            throwException a1
+            throwException a2
+            _ <- noWaitForBlock $ spawn $ readSide rd
+            pure ()
 
-
-    testPreAbandonRead :: Test
-    testPreAbandonRead = runTest "testAbandonRead" $ do
-        -- Like testAbandonRead, except we abandon the first read before
-        -- spawning the second.
-        (rd, wd) <- liftIO $ newDuct
-        asy1 <- spawnTest $ testEx $ testRead rd (Just 0)
-        pause
-        cancelTest asy1
-        pause
-        _ <- spawnTest $ testRead rd (Just 1)
-        pause
-        _ <- spawnTest $ testWrite wd 1 Open
-        pure ()
-
-    testPreAbandonWrite :: Test
-    testPreAbandonWrite = runTest "testAbandonWrite" $ do
-        -- Like testAbandonWrite, but like testPreAbandonRead we abandon
-        -- the first write before spawning the second.
-        (rd, wd) <- liftIO $ newFullDuct 1
-        asy1 <- spawnTest $ testEx $ testWrite wd 2 Open
-        pause
-        cancelTest asy1
-        pause
-        _ <- spawnTest $ testWrite wd 3 Open
-        pause
-        -- We need to read the value the duct was created with
-        _ <- spawnTest $ testRead rd (Just 1)
-        pause
-        -- And then we see the second value written.
-        _ <- spawnTest $ testRead rd (Just 3)
-        pure ()
-
-    type Ducts = (ReadDuct Int, WriteDuct Int)
-
-    testClosedClose :: Test
-    testClosedClose = TestLabel "closedClose" $
-                    TestList [ createClosed, createEmpty, createFull ]
         where
-            createClosed :: Test
-            createClosed = TestLabel "Duct initially closed" $
-                                pickClosed (doTest Nothing newClosedDuct) False
+            readSide :: ReadDuct Int -> ThreadM ()
+            readSide rd = do
+                doRead rd (Just 1)
+                doRead rd (Just 4)
+                doCloseRead rd Nothing
 
-            createEmpty :: Test
-            createEmpty = TestLabel "Duct initially empty" $
-                            pickClosed (doTest Nothing newDuct) True
+            exceptSide :: WriteDuct Int -> Int -> ThreadM ()
+            exceptSide wd x = expectException $ doWrite wd x Open
 
-            createFull :: Test
-            createFull = TestLabel "Duct initially full" $
-                            pickClosed (doTest (Just 1) (newFullDuct 1)) True
+            writeSide :: WriteDuct Int -> Int -> ThreadM ()
+            writeSide wd x = doWrite wd x Open
 
-            pickClosed ::
-                (Maybe ((Ducts -> M (Maybe Int)),
-                            Maybe (Ducts -> M (Maybe Int)))
-                    -> Test)
-                -> Bool
-                -> Test
-            pickClosed cont needAClose =
-                    TestList $ go <$> (if needAClose
-                                        then closeOpts
-                                        else
-                                            -- Add the "no closes" option
-                                            -- to the list.
-                                            (("No closes", Nothing)
-                                                : closeOpts))
-                where
-                    go :: (String, Maybe ((Ducts -> M (Maybe Int)),
-                                        Maybe (Ducts -> M (Maybe Int))))
-                            -> Test
-                    go (lbl, closes) = TestLabel lbl $ cont closes
-
-
-            closeOpts :: [ (String,
-                                Maybe ((Ducts -> M (Maybe Int)),
-                                        Maybe (Ducts -> M (Maybe Int)))) ]
-            closeOpts = [
-                ("Only Read", Just (readClose, Nothing)),
-                ("Only Write", Just (writeClose, Nothing)),
-                ("Double read", Just (readClose, Just readClose)),
-                ("Read then write", Just (readClose, Just writeClose)),
-                ("Write then read", Just (writeClose, Just readClose)),
-                ("Double write", Just (writeClose, Just writeClose)) ]
-
-            readClose :: Ducts -> M (Maybe Int)
-            readClose (rd, _) = liftIO $ closeReadDuct rd
-
-            writeClose :: Ducts -> M (Maybe Int)
-            writeClose (_, wd) = liftIO $ closeWriteDuct wd
-
-            doTest ::
-                Maybe Int
-                -> IO Ducts
-                -> Maybe ((Ducts -> M (Maybe Int)),
-                            Maybe (Ducts -> M (Maybe Int)))
-                -> Test
-            doTest expected createDucts closeOp = runTestBase $ do
-                ducts <- liftIO $ createDucts
-                case closeOp of
-                    Nothing -> pure ()
-                    Just (op, sec) -> do
-                        res <- op ducts
-                        liftIO $ assert (res == expected)
-                        case sec of
-                            Nothing -> pure ()
-                            Just op2 -> do
-                                res2 <- op2 ducts
-                                -- From the second close, we always expect
-                                -- Nothing.
-                                liftIO $ assert (res2 == Nothing)
-
-                _ <- spawnTest $ testRead (fst ducts) Nothing
-                pause
-                _ <- spawnTest $ testWrite (snd ducts) 1 Closed
-                pause
-                pure ()
-
-    testCloseBlocked :: Test
-    testCloseBlocked = TestLabel "testCloseBlocked" $ TestList [ rtest, wtest ]
+    testCloseReads1 :: Test
+    testCloseReads1 = runTestM "testCloseReads1" $ do
+            (rd, wd) <- lift $ newDuct
+            _ <- waitForBlock $ spawn $ readSide rd
+            _ <- waitForBlock $ spawn $ readSide rd
+            _ <- noWaitForBlock $ spawn $ closeSide wd
+            pure ()
         where
-            rtest :: Test
-            rtest = TestLabel "reads blocking" $
-                        pickClose (doTest Nothing makeDucts blockOp
-                                        readOp writeOp)
-                where
-                    makeDucts :: M Ducts
-                    makeDucts = liftIO $ newDuct
+            readSide :: ReadDuct Int -> ThreadM ()
+            readSide rd = doRead rd Nothing
 
-                    blockOp :: Ducts -> M ()
-                    blockOp (rd, _) = do
-                        _ <- spawnTest $ testRead rd Nothing
-                        -- We don't pause here because ordering isn't
-                        -- important.
-                        pure ()
+            closeSide :: WriteDuct Int -> ThreadM ()
+            closeSide wd = doCloseWrite wd 
 
-            readOp :: Ducts -> M ()
-            readOp (rd, _) = do
-                _ <- spawnTest $ testRead rd (Just 1)
-                pause
-                pure ()
+    testCloseReads2 :: Test
+    testCloseReads2 = runTestM "testCloseReads2" $ do
+            (rd, _) <- lift $ newDuct
+            _ <- waitForBlock $ spawn $ readSide rd
+            _ <- waitForBlock $ spawn $ readSide rd
+            _ <- noWaitForBlock $ spawn $ closeSide rd
+            pure ()
+        where
+            readSide :: ReadDuct Int -> ThreadM ()
+            readSide rd = doRead rd Nothing
 
-            writeOp :: Ducts -> M ()
-            writeOp (_, wd) = do
-                _ <- spawnTest $ testWrite wd 1 Open
-                pause
-                pure ()
+            closeSide :: ReadDuct Int -> ThreadM ()
+            closeSide rd = doCloseRead rd Nothing
 
-            wtest :: Test
-            wtest = TestLabel "writes blocking" $
-                        pickClose (doTest (Just 1) makeDucts blockOp
-                                        writeOp readOp)
-                where
-                    makeDucts :: M Ducts
-                    makeDucts = liftIO $ newFullDuct 1
+    testCloseWrites1 :: Test
+    testCloseWrites1 = runTestM "testCloseWrites1" $ do
+            (rd, wd) <- lift $ newFullDuct (1 :: Int)
+            _ <- waitForBlock $ spawn $ writeSide wd 2
+            _ <- waitForBlock $ spawn $ writeSide wd 3
+            _ <- noWaitForBlock $ spawn $ closeSide rd
+            pure ()
+        where
+            writeSide :: WriteDuct Int -> Int -> ThreadM ()
+            writeSide wd x = doWrite wd x Closed
 
-                    blockOp :: Ducts -> M ()
-                    blockOp (_, wd) = do
-                        _ <- spawnTest $ testWrite wd 1 Closed
-                        -- We don't pause here because ordering isn't
-                        -- important.
-                        pure ()
+            closeSide :: ReadDuct Int -> ThreadM ()
+            closeSide rd = doCloseRead rd (Just 1)
 
-            pickClose ::
-                ((Ducts -> M (Maybe Int)) -> Int -> Int -> Test)
-                -> Test
-            pickClose cont = TestList [ closeRead, closeWrite ]
-                where
-                    closeRead :: Test
-                    closeRead = pickNumBlocks $ cont $
-                                    \(rd, _) -> liftIO $ closeReadDuct rd
+    testCloseWrites2 :: Test
+    testCloseWrites2 = runTestM "testCloseWrites2" $ do
+            (_, wd) <- lift $ newFullDuct (1 :: Int)
+            _ <- waitForBlock $ spawn $ writeSide wd 2
+            _ <- waitForBlock $ spawn $ writeSide wd 3
+            _ <- noWaitForBlock $ spawn $ closeSide wd
+            pure ()
+        where
+            writeSide :: WriteDuct Int -> Int -> ThreadM ()
+            writeSide wd x = doWrite wd x Closed
 
-                    closeWrite :: Test
-                    closeWrite = pickNumBlocks $ cont $
-                                    \(_, wd) -> liftIO $ closeWriteDuct wd
+            closeSide :: WriteDuct Int -> ThreadM ()
+            closeSide wd = doCloseWrite wd
 
-
-            pickNumBlocks ::
-                (Int -> Int -> Test)
-                -> Test
-            pickNumBlocks cont = TestList $ go <$> [ 1 .. 5 ]
-                where
-                    go :: Int -> Test
-                    go num = TestLabel ("With " ++ show num ++ " blocks") $
-                                pickNumPreops $ cont num
-
-            pickNumPreops ::
-                (Int -> Test)
-                -> Test
-            pickNumPreops cont = TestList $ go <$> [ 0 .. 3 ]
-                where
-                    go :: Int -> Test
-                    go num = TestLabel ("With " ++ show num ++ " preops") $
-                                cont num
-
-            doTest ::
-                Maybe Int
-                -> M Ducts
-                -> (Ducts -> M ())
-                -> (Ducts -> M ())
-                -> (Ducts -> M ())
-                -> (Ducts -> M (Maybe Int))
-                -> Int
-                -> Int
-                -> Test
-            doTest expected makeDucts blockOp preOp postOp closeOp
-                    numBlocks numPreOps =
-                runTestBase $ do
-                    ducts <- makeDucts
-                    mapM_ (\_ -> preOp ducts) [ 1 .. numPreOps ]
-                    mapM_ (\_ -> blockOp ducts) [ 1 .. numBlocks ]
-                    pause
-                    mapM_ (\_ -> postOp ducts) [ 1 .. numPreOps ]
-                    res <- closeOp ducts
-                    liftIO $ assert (res == expected)
-
-    -}
