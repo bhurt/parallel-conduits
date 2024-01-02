@@ -1,6 +1,9 @@
 
 module MainBox (
     MainBox(..),
+    MainBoxLabels(..),
+    defaultMainBoxLabels,
+    mainBox',
     mainBox
 ) where
 
@@ -9,19 +12,33 @@ module MainBox (
     import           Text.Blaze.Internal (MarkupM)
     import           Types
 
+    data MainBoxLabels = MainBoxLabels {
+                            inputLabel :: String,
+                            outputLabel :: String,
+                            resultLabel :: String }
+
+    defaultMainBoxLabels :: MainBoxLabels
+    defaultMainBoxLabels = MainBoxLabels {
+                                inputLabel = "i",
+                                outputLabel = "o",
+                                resultLabel = "r" }
+
     data MainBox = MainBox {
                     inputAnchor :: Point,
                     outputAnchor :: Point,
                     resultAnchor :: Point  }
 
     mainBox :: MarkupM (Rect, MainBox)
-    mainBox = do
+    mainBox = mainBox' defaultMainBoxLabels
+
+    mainBox' :: MainBoxLabels -> MarkupM (Rect, MainBox)
+    mainBox' labels = do
         let r :: Rect
             r = makeRect origin 100
         rectRender r
-        text (move West 280 origin) "i"
-        text (move East 280 origin) "o"
-        text (move North 200 origin) "r"
+        text (move West 280 origin) (inputLabel labels)
+        text (move East 280 origin) (outputLabel labels)
+        text (move North 200 origin) (resultLabel labels)
         pure $ (r, MainBox {
                         inputAnchor = move West 270 origin,
                         outputAnchor = move East 270 origin,

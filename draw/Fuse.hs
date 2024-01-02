@@ -21,9 +21,9 @@ module Fuse (
                     c2Anchor :: Point,
                     rAnchor :: Point }
 
-    fuseBase :: MarkupM Fuse
-    fuseBase = do
-        (_, m) <- mainBox
+    fuseBase :: MainBoxLabels -> MarkupM Fuse
+    fuseBase labels = do
+        (_, m) <- mainBox' labels
         let r1 :: Rect
             r1 = makeRect (move West 100 origin) 30
             r2 :: Rect
@@ -46,7 +46,7 @@ module Fuse (
 
     fuse :: Svg
     fuse = do
-        f <- fuseBase
+        f <- fuseBase defaultMainBoxLabels
         let (m1, m3) = splitStep (makeStep Y (c2Anchor f) (rAnchor f)) 0.4
             m2 = makeStep X (c2Anchor f) (rAnchor f)
         route (c2Anchor f) [ m1, m2, m3 ]
@@ -55,7 +55,7 @@ module Fuse (
 
     fuseLeft :: Svg
     fuseLeft = do
-        f <- fuseBase
+        f <- fuseBase defaultMainBoxLabels
         let (m1, m3) = splitStep (makeStep Y (c1Anchor f) (rAnchor f)) 0.4
             m2 = makeStep X (c1Anchor f) (rAnchor f)
         route (c1Anchor f) [ m1, m2, m3 ]
@@ -63,9 +63,9 @@ module Fuse (
         route (c2Anchor f) [ step North 40 ]
 
 
-    fuseMapBase :: String -> Svg
-    fuseMapBase txt = do
-        f <- fuseBase
+    fuseMapBase :: String -> String -> Svg
+    fuseMapBase resLabel txt = do
+        f <- fuseBase (defaultMainBoxLabels { resultLabel = resLabel })
         let (m1, _) = splitStep (makeStep Y (c2Anchor f) (rAnchor f)) 0.4
             m2 = makeStep X (c2Anchor f) (rAnchor f)
             p = takeStep m1 (takeStep m2 (c2Anchor f))
@@ -80,15 +80,17 @@ module Fuse (
         route (c1Anchor f) [ sy, sx' ]
         route (c2Anchor f) [ sy, sx ]
         route p2 [ s3 ]
+        text (move North 30 (move East 20 (c2Anchor f))) "r2"
+        text (move North 30 (move West 20 (c1Anchor f))) "r1"
         text p txt
 
 
     fuseMap :: Svg
-    fuseMap = fuseMapBase "f"
+    fuseMap = fuseMapBase "f r1 r2" "f"
 
     fuseMonoid :: Svg
-    fuseMonoid = fuseMapBase "<>"
+    fuseMonoid = fuseMapBase "r1 <> r2" "<>"
 
     fuseTuple :: Svg
-    fuseTuple = fuseMapBase "(,)"
+    fuseTuple = fuseMapBase "(r1,r2)" "(,)"
 
