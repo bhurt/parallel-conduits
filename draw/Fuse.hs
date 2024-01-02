@@ -1,9 +1,13 @@
 
 module Fuse (
     fuse,
-    fuseLeft
+    fuseLeft,
+    fuseMap,
+    fuseMonoid,
+    fuseTuple
 ) where
 
+    import           Data.Fixed          (Deci)
     import           MainBox
     import           Rect
     import           Render
@@ -58,4 +62,33 @@ module Fuse (
         trashCan (move North 60 (c2Anchor f))
         route (c2Anchor f) [ step North 40 ]
 
+
+    fuseMapBase :: String -> Svg
+    fuseMapBase txt = do
+        f <- fuseBase
+        let (m1, _) = splitStep (makeStep Y (c2Anchor f) (rAnchor f)) 0.4
+            m2 = makeStep X (c2Anchor f) (rAnchor f)
+            p = takeStep m1 (takeStep m2 (c2Anchor f))
+            rad :: Deci
+            rad = 25
+        circle p rad
+        let sy = makeStep Y (c2Anchor f) p
+            sx = makeStep X (c2Anchor f) (move East rad p)
+            sx' = makeStep X (c1Anchor f) (move West rad p)
+            p2 = move North rad p
+            s3 = makeStep Y p2 (rAnchor f)
+        route (c1Anchor f) [ sy, sx' ]
+        route (c2Anchor f) [ sy, sx ]
+        route p2 [ s3 ]
+        text p txt
+
+
+    fuseMap :: Svg
+    fuseMap = fuseMapBase "f"
+
+    fuseMonoid :: Svg
+    fuseMonoid = fuseMapBase "<>"
+
+    fuseTuple :: Svg
+    fuseTuple = fuseMapBase "(,)"
 

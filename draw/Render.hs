@@ -5,6 +5,7 @@ module Render (
     origin,
     renderPolygonPoints,
     text,
+    circle,
     trashCan
 ) where
 
@@ -42,6 +43,12 @@ module Render (
     origin :: Point
     origin = Point 320 240
 
+
+    circle :: Point -> Deci -> Svg
+    circle org rad = S.circle
+                        ! A.cx (showDeci (x org))
+                        ! A.cy (showDeci (y org))
+                        ! A.r (showDeci rad)
 
     trashCan :: Point -> Svg
     trashCan org = do
