@@ -32,6 +32,10 @@ module Data.Conduit.Parallel.Internal.Fuse (
     import qualified Data.Conduit.Parallel.Internal.Duct as Duct
     import           Data.Conduit.Parallel.Internal.Type (ParConduit (..))
 
+    -- | Fuse two conduits, with a function to combine the results.
+    --
+    -- ![image](docs/fuseMap.svg)
+    --
     fuseMap :: forall r1 r2 r m i o x .
                     (MonadIO m
                     , NFData x)
@@ -53,6 +57,10 @@ module Data.Conduit.Parallel.Internal.Fuse (
                 pure $ fixr <$> r1 <*> r2
 
 
+    -- | Fuse two parallel conduits, returning the second result.
+    --
+    -- ![image](docs/fuse.svg)
+    --
     fuse :: forall r m i o x .
                     (MonadIO m
                     , NFData x)
@@ -61,6 +69,10 @@ module Data.Conduit.Parallel.Internal.Fuse (
                     -> ParConduit m r i o
     fuse = fuseMap (\() r -> r)
 
+    -- | Fuse two parallel conduits, returning the first result.
+    --
+    -- ![image](docs/fuseLeft.svg)
+    --
     fuseLeft :: forall r m i o x .
                     (MonadIO m
                     , NFData x)
@@ -69,6 +81,10 @@ module Data.Conduit.Parallel.Internal.Fuse (
                     -> ParConduit m r i o
     fuseLeft = fuseMap (\r () -> r)
 
+    -- | Fuse two parallel conduits, constructing a tuples of the results.
+    --
+    -- ![image](docs/fuseTuple.svg)
+    --
     fuseTuple :: forall r1 r2 m i o x .
                     (MonadIO m
                     , NFData x)
@@ -78,6 +94,10 @@ module Data.Conduit.Parallel.Internal.Fuse (
     fuseTuple = fuseMap (\r1 r2 -> (r1, r2))
 
 
+    -- | Fuse two parallel conduits, appending the two results.
+    --
+    -- ![image](docs/fuseSemigroup.svg)
+    --
     fuseSemigroup :: forall r m i o x .
                         (MonadIO m
                         , NFData x

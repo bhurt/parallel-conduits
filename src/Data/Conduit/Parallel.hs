@@ -1,8 +1,20 @@
 
 module Data.Conduit.Parallel (
-    foo
+    -- * The main type
+    ParConduit,
+
+    -- * Lifting conduits
+    liftC,
+
+    -- * Fusing
+    fuse,
+    fuseSemigroup,
+    fuseTuple,
+    fuseMap
+
 ) where
 
-    foo :: Int
-    foo = 4
+    import Data.Conduit.Parallel.Internal.Fuse
+    import Data.Conduit.Parallel.Internal.LiftC
+    import Data.Conduit.Parallel.Internal.Type
 

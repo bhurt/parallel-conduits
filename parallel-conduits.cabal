@@ -13,6 +13,11 @@ build-type:          Simple
 extra-source-files:  README.md
 cabal-version:       >=1.10
 extra-doc-files:     docs/fuse.svg
+                        , docs/fuseLeft.svg
+                        , docs/fuseMap.svg
+                        , docs/fuseSemigroup.svg
+                        , docs/fuseTuple.svg
+                        , docs/simple.svg
 
 Flag Devel
     Description:       Development build (enable warnings and less optimization)
