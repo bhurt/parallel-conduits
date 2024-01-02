@@ -61,6 +61,6 @@ main = do
     writeSVG (odir </> "fuse.svg") fuse
     writeSVG (odir </> "fuseLeft.svg") fuseLeft
     writeSVG (odir </> "fuseMap.svg") fuseMap
-    writeSVG (odir </> "fuseMonoid.svg") fuseMonoid
+    writeSVG (odir </> "fuseSemigroup.svg") fuseSemigroup
     writeSVG (odir </> "fuseTuple.svg") fuseTuple
     putStrLn "Done."

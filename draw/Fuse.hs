@@ -3,7 +3,7 @@ module Fuse (
     fuse,
     fuseLeft,
     fuseMap,
-    fuseMonoid,
+    fuseSemigroup,
     fuseTuple
 ) where
 
@@ -88,8 +88,8 @@ module Fuse (
     fuseMap :: Svg
     fuseMap = fuseMapBase "f r1 r2" "f"
 
-    fuseMonoid :: Svg
-    fuseMonoid = fuseMapBase "r1 <> r2" "<>"
+    fuseSemigroup :: Svg
+    fuseSemigroup = fuseMapBase "r1 <> r2" "<>"
 
     fuseTuple :: Svg
     fuseTuple = fuseMapBase "(r1,r2)" "(,)"
