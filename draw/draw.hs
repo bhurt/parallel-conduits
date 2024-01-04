@@ -21,8 +21,8 @@ writeSVG fname svg = do
         Blaze.renderSvg $
             S.docTypeSvg
                 ! A.version "1.1"
-                ! A.width "640"
-                ! A.height "480"
+                ! A.width "320"
+                ! A.height "240"
                 ! A.viewbox "0 0 640 480"
                 $ S.g   ! A.fill "none"
                         ! A.stroke "black"
