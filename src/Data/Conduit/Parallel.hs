@@ -8,6 +8,7 @@ module Data.Conduit.Parallel (
 
     -- * Fusing
     fuse,
+    fuseLeft,
     fuseSemigroup,
     fuseTuple,
     fuseMap

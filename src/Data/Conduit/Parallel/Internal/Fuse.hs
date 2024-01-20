@@ -25,12 +25,11 @@ module Data.Conduit.Parallel.Internal.Fuse (
     fuseMap
 ) where
 
-    import           Control.DeepSeq                     (NFData, force)
+    import           Control.DeepSeq
     import           Control.Exception                   (evaluate)
-    import           Control.Monad.Cont                  (ContT)
     import           Control.Monad.IO.Class              (MonadIO (..))
     import qualified Data.Conduit.Parallel.Internal.Duct as Duct
-    import           Data.Conduit.Parallel.Internal.Type (ParConduit (..))
+    import           Data.Conduit.Parallel.Internal.Type
 
     -- | Fuse two conduits, with a function to combine the results.
     --
@@ -43,20 +42,11 @@ module Data.Conduit.Parallel.Internal.Fuse (
                     -> ParConduit m r1 i x
                     -> ParConduit m r2 x o
                     -> ParConduit m r i o
-    fuseMap fixr pc1 pc2 = ParConduit go
+    fuseMap = fuseBase forceMe
         where
-            go :: forall t .
-                    Duct.ReadDuct i
-                    -> Duct.WriteDuct o
-                    -> ContT t m (m r)
-            go rd wd = do
-                (xrd, xwd) <- liftIO $ Duct.newDuct
-                let xwd' = Duct.contramapIO (evaluate . force) xwd
-                r1 <- getParConduit pc1 rd xwd'
-                r2 <- getParConduit pc2 xrd wd
-                pure $ fixr <$> r1 <*> r2
-
-
+            forceMe :: Duct.WriteDuct x -> Duct.WriteDuct x
+            forceMe = Duct.contramapIO (evaluate . force)
+                
     -- | Fuse two parallel conduits, returning the second result.
     --
     -- ![image](docs/fuse.svg)
@@ -100,8 +90,8 @@ module Data.Conduit.Parallel.Internal.Fuse (
     --
     fuseSemigroup :: forall r m i o x .
                         (MonadIO m
-                        , NFData x
-                        , Semigroup r)
+                        , Semigroup r
+                        , NFData x)
                         => ParConduit m r i x
                         -> ParConduit m r x o
                         -> ParConduit m r i o
