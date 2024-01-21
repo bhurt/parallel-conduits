@@ -17,6 +17,8 @@ extra-doc-files:     docs/fuse.svg
                         , docs/fuseMap.svg
                         , docs/fuseSemigroup.svg
                         , docs/fuseTuple.svg
+                        , docs/parallel.svg
+                        , docs/proFunctor.svg
                         , docs/simple.svg
 
 Flag Devel
