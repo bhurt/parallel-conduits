@@ -67,6 +67,7 @@ module Route (
 
 
     polyline :: Point -> [ Step ] -> Svg
+    polyline start [ m ] = line start (takeStep m start)
     polyline start moves =
             S.polyline 
                 ! A.points (fromString points)
