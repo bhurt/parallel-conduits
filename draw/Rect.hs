@@ -3,6 +3,7 @@
 module Rect (
     Rect(..),
     makeRect,
+    makeBox,
     rectControl,
     rectRender
 ) where
@@ -26,6 +27,12 @@ module Rect (
                             rectOrg = org,
                             xstep = scale * 2,
                             ystep = scale * 1.5 }
+
+    makeBox :: Point -> Deci -> Rect
+    makeBox org scale = Rect {
+                            rectOrg = org,
+                            xstep = scale / 2,
+                            ystep = scale / 2 }
 
     rectControl :: Rect -> Direction -> Point
     rectControl rect West  = move West  (xstep rect) (rectOrg rect)

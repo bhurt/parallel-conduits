@@ -4,6 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 import           Fuse
+import           Misc
 import           Simple
 import           System.Directory               (doesDirectoryExist)
 import           System.Environment             (getArgs)
@@ -63,4 +64,5 @@ main = do
     writeSVG (odir </> "fuseMap.svg") fuseMap
     writeSVG (odir </> "fuseSemigroup.svg") fuseSemigroup
     writeSVG (odir </> "fuseTuple.svg") fuseTuple
+    writeSVG (odir </> "proFunctor.svg") proFunctor
     putStrLn "Done."
