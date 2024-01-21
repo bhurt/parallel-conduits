@@ -65,4 +65,5 @@ main = do
     writeSVG (odir </> "fuseSemigroup.svg") fuseSemigroup
     writeSVG (odir </> "fuseTuple.svg") fuseTuple
     writeSVG (odir </> "proFunctor.svg") proFunctor
+    writeSVG (odir </> "parallel.svg") parallel
     putStrLn "Done."

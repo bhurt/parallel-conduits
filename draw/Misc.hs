@@ -1,6 +1,7 @@
 
 module Misc (
-    proFunctor
+    proFunctor,
+    parallel
 ) where
 
     import           MainBox
@@ -45,4 +46,54 @@ module Misc (
             [ makeStep X (rectControl gbox East) (outputAnchor mbox) ]
 
 
+    parallel :: Svg
+    parallel = do
+            let mboxLabels = defaultMainBoxLabels {
+                                    resultLabel = ""
+                                }
+            (mbox, mboxAnchors) <- mainBox' mboxLabels
+            let s :: Step
+                s = makeStep Y (rectControl mbox North)
+                                    (rectControl mbox South)
+            let p1 = takeStep (fst (splitStep s 0.2)) (rectControl mbox North)
+                p2 = takeStep (fst (splitStep s 0.4)) (rectControl mbox North)
+                p3 = takeStep (fst (splitStep s 0.6)) (rectControl mbox North)
+                p4 = takeStep (fst (splitStep s 0.8)) (rectControl mbox North)
+
+                b1 = makeRect' p1 150 50
+                b2 = makeRect' p2 150 50
+                b4 = makeRect' p4 150 50
+
+            rectRender b1
+            rectRender b2
+            rectRender b4
+
+            text p1 "f #1"
+            text p2 "f #2"
+            text p3 "..."
+            text p4 "f #n"
+
+            let wcp = move West 160 origin
+                wp1 = takeStep (makeStep Y origin p1) wcp
+                wp2 = takeStep (makeStep Y origin p2) wcp
+                wp4 = takeStep (makeStep Y origin p4) wcp
+                wp = takeStep (makeStep X (inputAnchor mboxAnchors) wcp)
+                        (inputAnchor mboxAnchors)
+            line (inputAnchor mboxAnchors) wp
+            line wp1 wp4
+            route wp1 [ makeStep X wp1 (rectControl b1 West) ]
+            route wp2 [ makeStep X wp2 (rectControl b2 West) ]
+            route wp4 [ makeStep X wp4 (rectControl b4 West) ]
+
+            let ecp = move East 160 origin
+                ep1 = takeStep (makeStep Y origin p1) ecp
+                ep2 = takeStep (makeStep Y origin p2) ecp
+                ep4 = takeStep (makeStep Y origin p4) ecp
+                ep = takeStep (makeStep X (outputAnchor mboxAnchors) ecp)
+                        (outputAnchor mboxAnchors)
+            route ep [ makeStep X ep (outputAnchor mboxAnchors) ]
+            line ep1 ep4
+            line (rectControl b1 East) ep1
+            line (rectControl b2 East) ep2
+            line (rectControl b4 East) ep4
 

@@ -2,7 +2,9 @@
 
 module Route (
     arrowHead,
-    route
+    route,
+    polyline,
+    line
 ) where
 
     import           Data.String
@@ -32,11 +34,9 @@ module Route (
             points = renderPolygonPoints [ pt, pt2, pt3, pt4 ]
 
     route :: Point -> [ Step ] -> Svg
-    route start moves =
-            S.polyline 
-                ! A.points (fromString points)
-                ! A.strokeWidth "2"
-            <> arrowHead lastDirection lastPoint
+    route start moves = do
+            polyline start moves1
+            arrowHead lastDirection lastPoint
         where
 
             moves1 :: [ Step ]
@@ -49,16 +49,6 @@ module Route (
                 | dist m < -10 = [ m { dist = dist m + 10 } ]
                 | otherwise    = []
             shortLast (m : ms) = m : shortLast ms
-
-            polyPoints :: [ Point ]
-            polyPoints = run start moves1
-
-            run :: Point -> [ Step ] -> [ Point ]
-            run pt []             = [ pt ]
-            run pt (m :  ms)      = pt : run (takeStep m pt) ms
-
-            points :: String
-            points = renderPolygonPoints polyPoints
 
             getLastDirection :: [ Step ] -> Direction
             getLastDirection [] = East
@@ -75,4 +65,30 @@ module Route (
             lastPoint :: Point
             lastPoint = getLastPoint moves start
 
+
+    polyline :: Point -> [ Step ] -> Svg
+    polyline start moves =
+            S.polyline 
+                ! A.points (fromString points)
+                ! A.strokeWidth "2"
+        where
+            polyPoints :: [ Point ]
+            polyPoints = run start moves
+
+            run :: Point -> [ Step ] -> [ Point ]
+            run pt []             = [ pt ]
+            run pt (m :  ms)      = pt : run (takeStep m pt) ms
+
+            points :: String
+            points = renderPolygonPoints polyPoints
+
+
+    line :: Point -> Point -> Svg
+    line start stop =
+        S.line
+            ! A.x1 (fromString (show (x start)))
+            ! A.y1 (fromString (show (y start)))
+            ! A.x2 (fromString (show (x stop)))
+            ! A.y2 (fromString (show (y stop)))
+            ! A.strokeWidth "2"
 

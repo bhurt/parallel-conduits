@@ -2,6 +2,7 @@
 
 module Rect (
     Rect(..),
+    makeRect',
     makeRect,
     makeBox,
     rectControl,
@@ -22,17 +23,18 @@ module Rect (
                     xstep :: Deci,
                     ystep :: Deci }
 
+    makeRect' :: Point -> Deci -> Deci -> Rect
+    makeRect' org xscale yscale = Rect {
+                                    rectOrg = org,
+                                    xstep = xscale/2,
+                                    ystep = yscale/2 }
+
+
     makeRect :: Point -> Deci -> Rect
-    makeRect org scale = Rect {
-                            rectOrg = org,
-                            xstep = scale * 2,
-                            ystep = scale * 1.5 }
+    makeRect org scale = makeRect' org (scale * 4) (scale * 3)
 
     makeBox :: Point -> Deci -> Rect
-    makeBox org scale = Rect {
-                            rectOrg = org,
-                            xstep = scale / 2,
-                            ystep = scale / 2 }
+    makeBox org scale = makeRect' org scale scale
 
     rectControl :: Rect -> Direction -> Point
     rectControl rect West  = move West  (xstep rect) (rectOrg rect)

@@ -7,6 +7,7 @@ module MainBox (
     mainBox
 ) where
 
+    import           Control.Monad       (when)
     import           Rect
     import           Render
     import           Text.Blaze.Internal (MarkupM)
@@ -36,9 +37,12 @@ module MainBox (
         let r :: Rect
             r = makeRect origin 100
         rectRender r
-        text (move West 280 origin) (inputLabel labels)
-        text (move East 280 origin) (outputLabel labels)
-        text (move North 200 origin) (resultLabel labels)
+        when (inputLabel labels /= "") $
+            text (move West 280 origin) (inputLabel labels)
+        when (outputLabel labels /= "") $
+            text (move East 280 origin) (outputLabel labels)
+        when (resultLabel labels /= "") $
+            text (move North 200 origin) (resultLabel labels)
         pure $ (r, MainBox {
                         inputAnchor = move West 270 origin,
                         outputAnchor = move East 270 origin,
