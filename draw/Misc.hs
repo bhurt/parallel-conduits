@@ -60,18 +60,18 @@ module Misc (
                 p3 = takeStep (fst (splitStep s 0.6)) (rectControl mbox North)
                 p4 = takeStep (fst (splitStep s 0.8)) (rectControl mbox North)
 
-                b1 = makeRect' p1 150 50
-                b2 = makeRect' p2 150 50
-                b4 = makeRect' p4 150 50
+                b1 = makeRect' p1 200 50
+                b2 = makeRect' p2 200 50
+                b4 = makeRect' p4 200 50
 
             rectRender b1
             rectRender b2
             rectRender b4
 
-            text p1 "f #1"
-            text p2 "f #2"
+            text p1 "inner #1"
+            text p2 "inner #2"
             text p3 "..."
-            text p4 "f #n"
+            text p4 "inner #num"
 
             let wcp = move West 160 origin
                 wp1 = takeStep (makeStep Y origin p1) wcp

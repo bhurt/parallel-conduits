@@ -11,11 +11,15 @@ module Data.Conduit.Parallel (
     fuseLeft,
     fuseSemigroup,
     fuseTuple,
-    fuseMap
+    fuseMap,
+
+    -- * Parallel
+    parallel
 
 ) where
 
-    import Data.Conduit.Parallel.Internal.Fuse
-    import Data.Conduit.Parallel.Internal.LiftC
-    import Data.Conduit.Parallel.Internal.Type
+    import           Data.Conduit.Parallel.Internal.Fuse
+    import           Data.Conduit.Parallel.Internal.LiftC
+    import           Data.Conduit.Parallel.Internal.Parallel
+    import           Data.Conduit.Parallel.Internal.Type
 

@@ -7,14 +7,14 @@
 -- |
 -- Module      : Data.Conduit.Parallel.Internal.Duct
 -- Description : Ducts (aka Closable MVars)
--- Copyright   : (c) Brian Hurt, 2023
+-- Copyright   : (c) Brian Hurt, 2024
 -- License     : BSD 3-clause
 -- Maintainer  : bhurt42@gmail.com
 -- Stability   : experimental
 --
 -- = Warning
 --
--- This is an internal module of the Parallel Conduits.  You almost
+-- This is an internal module of the Parallel Conduits library.  You almost
 -- certainly want to use [Data.Conduit.Parallel](Data-Conduit-Parallel.html)
 -- instead.  Anything in this module not explicitly re-exported 
 -- by [Data.Conduit.Parallel](Data-Conduit-Parallel.html)
@@ -54,7 +54,9 @@ module Data.Conduit.Parallel.Internal.Duct(
     closeWriteDuct,
     readDuct,
     writeDuct,
-    contramapIO
+    contramapIO,
+    commonReadClose,
+    commonWriteClose
 ) where
 
     import           Control.Concurrent.STM
@@ -64,6 +66,8 @@ module Data.Conduit.Parallel.Internal.Duct(
     import           Data.Sequence              (Seq)
     import qualified Data.Sequence              as Seq
     import           GHC.Generics               (Generic)
+    import           UnliftIO                   (MonadUnliftIO)
+    import qualified UnliftIO
 
     -- So, a word of warning before we dig in.  Yeah, this module is
     -- documented.  Probably over-documented.  But here's the thing:
@@ -778,3 +782,37 @@ module Data.Conduit.Parallel.Internal.Duct(
                     -> WriteDuct a
     contramapIO f wd = wd { writeDuct = \mr -> f >=> writeDuct wd mr }
 
+
+    -- | Create a sharable read duct with a common close.
+    --
+    -- Creates a new read duct with a no-op close function.  When the
+    -- block exits, either via a normal return or via an exception,
+    -- the original read duct is closed.
+    --
+    commonReadClose :: forall a r m .
+                        MonadUnliftIO m
+                        => ReadDuct a
+                        -> (ReadDuct a -> m r)
+                        -> m r
+    commonReadClose rd =
+        UnliftIO.bracket
+            (pure $ rd { closeReadDuct = pure Nothing })
+            (\_ -> do
+                _ <- liftIO $ closeReadDuct rd
+                pure ())
+
+    -- | Create a sharable read duct with a common close.
+    --
+    -- Creates a new read duct with a no-op close function.  When the
+    -- block exits, either via a normal return or via an exception,
+    -- the original read duct is closed.
+    --
+    commonWriteClose :: forall a r m .
+                        MonadUnliftIO m
+                        => WriteDuct a
+                        -> (WriteDuct a -> m r)
+                        -> m r
+    commonWriteClose wd =
+        UnliftIO.bracket
+            (pure $ wd { closeWriteDuct = pure () })
+            (\_ -> liftIO $ closeWriteDuct wd)
