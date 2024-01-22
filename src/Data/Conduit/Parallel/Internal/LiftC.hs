@@ -3,14 +3,14 @@
 -- |
 -- Module      : Data.Conduit.Parallel.Internal.LiftC
 -- Description : Lifting normal conduits up into parallel conduits
--- Copyright   : (c) Brian Hurt, 2023
+-- Copyright   : (c) Brian Hurt, 2024
 -- License     : BSD 3-clause
 -- Maintainer  : bhurt42@gmail.com
 -- Stability   : experimental
 --
 -- = Warning
 --
--- This is an internal module of the Parallel Conduits.  You almost
+-- This is an internal module of the Parallel Conduits library.  You almost
 -- certainly want to use [Data.Conduit.Parallel](Data-Conduit-Parallel.html)
 -- instead.  Anything in this module not explicitly re-exported 
 -- by [Data.Conduit.Parallel](Data-Conduit-Parallel.html)
