@@ -24,14 +24,15 @@ module Data.Conduit.Parallel.Internal.Type (
     fuseBase
 ) where
 
-    import qualified Control.Category                     as Cat
-    import           Control.Monad.Cont                   (ContT)
+    import qualified Control.Category                      as Cat
+    import           Control.Monad.Cont                    (ContT)
     import           Control.Monad.IO.Class
-    import           Control.Monad.IO.Unlift              (MonadUnliftIO)
-    import qualified Data.Conduit.Parallel.Internal.Duct  as Duct
-    import           Data.Conduit.Parallel.Internal.Spawn (spawn)
-    import qualified Data.Functor.Contravariant           as Contra
-    import qualified Data.Profunctor                      as Pro
+    import           Control.Monad.IO.Unlift               (MonadUnliftIO)
+    import           Data.Conduit.Parallel.Internal.Copier (copier)
+    import qualified Data.Conduit.Parallel.Internal.Duct   as Duct
+    import           Data.Conduit.Parallel.Internal.Spawn  (spawn)
+    import qualified Data.Functor.Contravariant            as Contra
+    import qualified Data.Profunctor                       as Pro
 
 
     newtype ParConduit m r i o = ParConduit {
@@ -98,25 +99,6 @@ module Data.Conduit.Parallel.Internal.Type (
                     go :: Duct.ReadDuct a
                             -> Duct.WriteDuct a
                             -> ContT t m (m r)
-                    go rd wr = spawn (work rd wr)
-
-                    work :: Duct.ReadDuct a
-                            -> Duct.WriteDuct a
-                            -> m r
-                    work rd wr = do
-                        mx <- liftIO $ Duct.readDuct rd Nothing
-                        case mx of
-                            Nothing -> do
-                                _ <- liftIO $ Duct.closeReadDuct rd
-                                liftIO $ Duct.closeWriteDuct wr
-                                pure mempty
-                            Just x -> do
-                                mr <- liftIO $ Duct.writeDuct wr Nothing x
-                                case mr of
-                                    Duct.Open -> work rd wr
-                                    Duct.Closed -> do
-                                        _ <- liftIO $ Duct.closeReadDuct rd
-                                        liftIO $ Duct.closeWriteDuct wr
-                                        pure mempty
+                    go rd wr = spawn (copier rd wr [])
 
         (.) = flip $ fuseBase Prelude.id mappend

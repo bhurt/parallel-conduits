@@ -18,7 +18,8 @@
 -- notice.  Use at your own risk.
 --
 module Data.Conduit.Parallel.Internal.Spawn (
-    spawn
+    spawn,
+    spawnControl
 ) where
 
     import           Control.Monad.Cont      (ContT(..), lift)
@@ -34,4 +35,12 @@ module Data.Conduit.Parallel.Internal.Spawn (
             lift $ Async.link asy
             pure $ Async.wait asy
 
+    spawnControl :: forall m a r .
+                        MonadUnliftIO m
+                        => ContT a m (m a)
+                        -> ContT r m (m a)
+    spawnControl act = spawn go
+        where
+            go :: m a
+            go = runContT act id
 

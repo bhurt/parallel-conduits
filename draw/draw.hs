@@ -10,6 +10,7 @@ import           System.Directory               (doesDirectoryExist)
 import           System.Environment             (getArgs)
 import           System.Exit                    (exitFailure)
 import           System.FilePath                ((</>))
+import           Tee
 import qualified Text.Blaze.Svg.Renderer.String as Blaze
 import           Text.Blaze.Svg11               (Svg, (!))
 import qualified Text.Blaze.Svg11               as S
@@ -66,4 +67,6 @@ main = do
     writeSVG (odir </> "fuseTuple.svg") fuseTuple
     writeSVG (odir </> "proFunctor.svg") proFunctor
     writeSVG (odir </> "parallel.svg") parallel
+    writeSVG (odir </> "tee.svg") tee
+    writeSVG (odir </> "merge.svg") merge
     putStrLn "Done."
