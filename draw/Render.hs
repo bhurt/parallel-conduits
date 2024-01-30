@@ -5,6 +5,7 @@ module Render (
     origin,
     renderPolygonPoints,
     text,
+    text',
     circle,
     trashCan
 ) where
@@ -38,6 +39,14 @@ module Render (
                         ! A.x (showDeci (x org))
                         ! A.y (showDeci (y org))
                         ! A.fill "black"
+                        $ S.text (fromString txt)
+
+    text' :: Deci -> Point -> String -> Svg
+    text' fsize org txt = S.text_
+                        ! A.x (showDeci (x org))
+                        ! A.y (showDeci (y org))
+                        ! A.fill "black"
+                        ! A.fontSize (showDeci fsize)
                         $ S.text (fromString txt)
 
     origin :: Point

@@ -79,6 +79,7 @@ module Data.Conduit.Parallel.Internal.Duct(
     -- And have a bunch of unit tests.  It's a case of belt *and* suspenders,
     -- and duct tape and super glue and staples and ...
     --
+    -- 
     -- **********************************************************************
     -- **                                                                  **
     -- **                      Developer's Commentary                      **
@@ -273,18 +274,31 @@ module Data.Conduit.Parallel.Internal.Duct(
 
     -- | Maybe-analog as to whether the duct contains a value or not.
     data Contents a =
-        Full a
-        | Empty
+        Full a      -- ^ The duct is full (contains a value)
+        | Empty     -- ^ The duct is empty
+
+    -- This used to be called the State, but then I wanted to use a StateT
+    -- transformer, and the name clash caused sadness in the compiler.  So
+    -- it got renamed.
 
     -- | The current state of a Duct.
+    --
+    -- It is possible for there to be both readers and writers queued up.
+    -- This is because we depend upon the threads to remove themselves
+    -- from the queues- so, for example, a reader could empty the duct,
+    -- waking up a writer.  But before the writer can wake up, refill the
+    -- duct, and remove itself from the queue, more readers show up.
+    --
+    -- This is generally a short-lived situation.  But "short-lived"
+    -- does not mean "impossible".
+    --
+    -- Also note that the duct can be partially closed- closed for writes,
+    -- but still open for reads (as it holds a value).
     data Status a = Status {
                         sReadersQueue :: Seq Waiter,
                         sWritersQueue :: Seq Waiter,
                         sWriteClosed :: Bool,
                         sContents :: Contents a }
-    -- This used to be called the State, but then I wanted to use a StateT
-    -- transformer, and the name clash caused sadness in the compiler.  So
-    -- it got renamed.
 
     -- | The read endpoint of a duct.
     data ReadDuct a = ReadDuct { 
@@ -496,7 +510,6 @@ module Data.Conduit.Parallel.Internal.Duct(
 
     -- | Create a waiter, and clean up after.
     --
-    -- 
     withWaiter :: forall a b .
                     StatusTVar b
                     -> (Waiter -> IO a)

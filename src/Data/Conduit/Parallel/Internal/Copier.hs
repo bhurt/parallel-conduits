@@ -32,24 +32,26 @@ module Data.Conduit.Parallel.Internal.Copier (
                 -> WriteDuct a
                 -> [ WriteDuct a ]
                 -> m r
-    copier rd wd1 wds = liftIO $ finally loop closeAll
+    copier rd wd1 wds = liftIO $ finally (loop (wd1 : wds)) closeAll
         where
-            loop :: IO r
-            loop = do
+            loop :: [ WriteDuct a ] -> IO r
+            loop [] = pure mempty
+            loop ws = do
                 mr :: Maybe a <- readDuct rd Nothing
                 case mr of
                     Nothing -> pure mempty
-                    Just r -> doWrites r wd1 wds
+                    Just r -> doWrites r ws []
 
-            doWrites :: a -> WriteDuct a -> [ WriteDuct a ] -> IO r
-            doWrites r w1 ws = do
-                o :: Open <- writeDuct w1 Nothing r
+            doWrites :: a
+                        -> [ WriteDuct a ]
+                        -> [ WriteDuct a ]
+                        -> IO r
+            doWrites _ []       rs = loop $ reverse rs
+            doWrites r (w : ws) rs = do
+                o :: Open <- writeDuct w Nothing r
                 case o of
-                    Closed -> pure mempty
-                    Open ->
-                        case ws of
-                            (x:xs) -> doWrites r x xs
-                            []     -> loop
+                    Closed -> doWrites r ws rs
+                    Open   -> doWrites r ws (w : rs)
 
             closeAll :: IO ()
             closeAll = do

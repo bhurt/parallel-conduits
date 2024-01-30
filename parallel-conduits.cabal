@@ -13,13 +13,19 @@ build-type:          Simple
 extra-source-files:  README.md
 cabal-version:       >=1.10
 extra-doc-files:     docs/fuse.svg
+                        , docs/fixP.svg
                         , docs/fuseLeft.svg
                         , docs/fuseMap.svg
                         , docs/fuseSemigroup.svg
                         , docs/fuseTuple.svg
+                        , docs/merge.svg
                         , docs/parallel.svg
                         , docs/proFunctor.svg
+                        , docs/routeEither.svg
+                        , docs/routeThese.svg
+                        , docs/routeTuple.svg
                         , docs/simple.svg
+                        , docs/tee.svg
 
 Flag Devel
     Description:       Development build (enable warnings and less optimization)
@@ -28,6 +34,7 @@ Flag Devel
 library
   hs-source-dirs:      src
   exposed-modules:     Data.Conduit.Parallel
+                        , Data.Conduit.Parallel.Internal.Circuit
                         , Data.Conduit.Parallel.Internal.Copier
                         , Data.Conduit.Parallel.Internal.Duct
                         , Data.Conduit.Parallel.Internal.Fuse
@@ -35,6 +42,7 @@ library
                         , Data.Conduit.Parallel.Internal.Parallel
                         , Data.Conduit.Parallel.Internal.Run
                         , Data.Conduit.Parallel.Internal.Spawn
+                        , Data.Conduit.Parallel.Internal.Tee
                         , Data.Conduit.Parallel.Internal.Type
   build-depends:       base >= 4.7 && < 5
                         , conduit
@@ -43,12 +51,12 @@ library
                         , mtl
                         , profunctors
                         , stm
+                        , these
                         , unliftio
                         , unliftio-core
                         -- , lifted-base
                         -- , monad-control
                         -- , selective
-                        -- , these
                         -- , transformers
                         -- , witherable
   default-language:    Haskell2010
