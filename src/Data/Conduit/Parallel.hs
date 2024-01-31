@@ -8,30 +8,35 @@
 --
 
 module Data.Conduit.Parallel (
-    -- * The main type
+    -- * ParConduits
+
     ParConduit,
 
-    -- * Lifting conduits
+    -- ** Lifting conduits
     liftC,
 
-    -- * Fusing
+    -- ** Fusing
     fuse,
     fuseLeft,
     fuseSemigroup,
     fuseTuple,
     fuseMap,
 
-    -- * Routing
+    -- ** Routing
     parallel,
     tee,
     merge,
     routeEither,
     routeThese,
     routeTuple,
-    fixP
+    fixP,
+
+    -- ** Caching
+    cache
 
 ) where
 
+    import           Data.Conduit.Parallel.Internal.Cache
     import           Data.Conduit.Parallel.Internal.Circuit
     import           Data.Conduit.Parallel.Internal.Fuse
     import           Data.Conduit.Parallel.Internal.LiftC
