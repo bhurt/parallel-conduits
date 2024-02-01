@@ -99,6 +99,8 @@ module Data.Conduit.Parallel.Internal.Type (
                     go :: Duct.ReadDuct a
                             -> Duct.WriteDuct a
                             -> ContT t m (m r)
-                    go rd wr = spawn (copier rd wr [])
+                    go rd wr = spawn . liftIO $ do
+                                    copier rd wr
+                                    pure mempty
 
         (.) = flip $ fuseBase Prelude.id mappend

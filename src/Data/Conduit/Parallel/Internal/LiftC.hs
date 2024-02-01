@@ -30,7 +30,6 @@ module Data.Conduit.Parallel.Internal.LiftC (
     import           Data.Conduit.Parallel.Internal.Spawn (spawn)
     import           Data.Conduit.Parallel.Internal.Type  (ParConduit (..))
     import           Data.Void                            (Void)
-    import           UnliftIO.Exception                   (finally)
 
     liftC :: forall m r i o .
                 MonadUnliftIO m
@@ -47,10 +46,9 @@ module Data.Conduit.Parallel.Internal.LiftC (
             work :: Duct.ReadDuct i
                     -> Duct.WriteDuct o
                     -> m r
-            work rd wd = finally runc closeall
-                where
-                    runc :: m r
-                    runc = 
+            work src snk = 
+                Duct.withReadDuct src Nothing $ \rd ->
+                    Duct.withWriteDuct snk Nothing $ \wd ->
                         let c1 :: C.ConduitT () o m r
                             c1 = readConduit rd .| cdt
 
@@ -59,26 +57,21 @@ module Data.Conduit.Parallel.Internal.LiftC (
                         in
                         C.runConduit c2
 
-                    closeall :: m ()
-                    closeall = liftIO $ do
-                                            _ <- Duct.closeReadDuct rd
-                                            Duct.closeWriteDuct wd
-
-            readConduit :: Duct.ReadDuct i -> C.ConduitT () i m ()
+            readConduit :: IO (Maybe i) -> C.ConduitT () i m ()
             readConduit rd = do
-                x <- liftIO $ Duct.readDuct rd Nothing
+                x <- liftIO rd
                 case x of
                     Just v -> do
                         C.yield v
                         readConduit rd
                     Nothing -> pure ()
 
-            writeConduit :: Duct.WriteDuct o -> C.ConduitT o Void m ()
+            writeConduit :: (o -> IO Duct.Open) -> C.ConduitT o Void m ()
             writeConduit wd = do
                 x <- C.await
                 case x of
                     Just v  -> do
-                        open <- liftIO $ Duct.writeDuct wd Nothing v
+                        open <- liftIO $ wd v
                         case open of
                             Duct.Open   -> writeConduit wd
                             Duct.Closed -> pure ()

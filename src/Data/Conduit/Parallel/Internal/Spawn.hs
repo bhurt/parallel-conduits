@@ -19,11 +19,11 @@
 --
 module Data.Conduit.Parallel.Internal.Spawn (
     spawn,
-    spawnControl
+    spawnIO
 ) where
 
     import           Control.Monad.Cont      (ContT(..), lift)
-    import           Control.Monad.IO.Unlift (MonadUnliftIO)
+    import           Control.Monad.IO.Unlift (MonadUnliftIO, liftIO)
     import qualified UnliftIO.Async          as Async
 
     spawn :: forall m a r .
@@ -35,12 +35,9 @@ module Data.Conduit.Parallel.Internal.Spawn (
             lift $ Async.link asy
             pure $ Async.wait asy
 
-    spawnControl :: forall m a r .
-                        MonadUnliftIO m
-                        => ContT a m (m a)
-                        -> ContT r m (m a)
-    spawnControl act = spawn go
-        where
-            go :: m a
-            go = runContT act id
+    spawnIO :: forall m a r .
+                MonadUnliftIO m
+                => IO a
+                -> ContT r m (m a)
+    spawnIO = spawn . liftIO
 

@@ -49,10 +49,10 @@ module Data.Conduit.Parallel.Internal.Tee (
             go rd wd = do
                 (rd2, wd2) :: (ReadDuct i, WriteDuct i)
                     <- liftIO $ newDuct
-                (_, wdc) :: (ReadDuct Void, WriteDuct Void)
-                    <- liftIO $ newClosedDuct
+                let wdc :: WriteDuct Void
+                    (_, wdc) = newClosedDuct
                 r1 :: m r <- getParConduit sink rd2 wdc
-                r2 :: m () <- spawn $ copier rd wd [ wd2 ]
+                r2 :: m () <- spawnIO $ duplicator rd wd wd2
                 pure $ r2 >> r1
 
 
@@ -72,15 +72,11 @@ module Data.Conduit.Parallel.Internal.Tee (
                     ReadDuct o
                     -> WriteDuct o
                     -> ContT x m (m r)
-            go rd wd = spawnControl $ cntl rd wd
-
-            cntl :: ReadDuct o
-                    -> WriteDuct o
-                    -> ContT r m (m r)
-            cntl rd wd' = do
-                (crd, _) <- liftIO $ newClosedDuct
-                wd <- ContT $ commonWriteClose wd'
-                mu :: m () <- spawn $ copier rd wd []
+            go rd wd = do
+                let crd :: ReadDuct ()
+                    (crd, _) = newClosedDuct
+                liftIO $ addWriteOpens wd 1
+                mu :: m () <- spawnIO $ copier rd wd
                 mr :: m r  <- getParConduit source crd wd
                 pure $ mu >> mr
 

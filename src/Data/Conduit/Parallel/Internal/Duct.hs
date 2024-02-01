@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns        #-}
 {-# LANGUAGE DeriveGeneric       #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE LambdaCase          #-}
@@ -50,13 +51,11 @@ module Data.Conduit.Parallel.Internal.Duct(
     newDuct,
     newFullDuct,
     newClosedDuct,
-    closeReadDuct,
-    closeWriteDuct,
-    readDuct,
-    writeDuct,
-    contramapIO,
-    commonReadClose,
-    commonWriteClose
+    withReadDuct,
+    withWriteDuct,
+    addReadOpens,
+    addWriteOpens,
+    contramapIO
 ) where
 
     import           Control.Concurrent.STM
@@ -276,13 +275,17 @@ module Data.Conduit.Parallel.Internal.Duct(
     data Contents a =
         Full a      -- ^ The duct is full (contains a value)
         | Empty     -- ^ The duct is empty
-
     -- This used to be called the State, but then I wanted to use a StateT
     -- transformer, and the name clash caused sadness in the compiler.  So
     -- it got renamed.
 
     -- | The current state of a Duct.
     --
+    data Status a = Status {
+                        sReadersQueue :: Seq Waiter,
+                        sWritersQueue :: Seq Waiter,
+                        sWriteClosed :: Bool,
+                        sContents :: Contents a }
     -- It is possible for there to be both readers and writers queued up.
     -- This is because we depend upon the threads to remove themselves
     -- from the queues- so, for example, a reader could empty the duct,
@@ -294,24 +297,19 @@ module Data.Conduit.Parallel.Internal.Duct(
     --
     -- Also note that the duct can be partially closed- closed for writes,
     -- but still open for reads (as it holds a value).
-    data Status a = Status {
-                        sReadersQueue :: Seq Waiter,
-                        sWritersQueue :: Seq Waiter,
-                        sWriteClosed :: Bool,
-                        sContents :: Contents a }
 
     -- | The read endpoint of a duct.
     data ReadDuct a = ReadDuct { 
+                            readAddOpens :: Int -> IO (),
                             readDuct :: Maybe (IO ()) -> IO (Maybe a),
-                            closeReadDuct :: IO (Maybe a) }
+                            closeReadDuct :: IO () }
 
     instance Functor ReadDuct where
-        fmap f rd = ReadDuct {
-                        readDuct = \mr -> fmap f <$> readDuct rd mr,
-                        closeReadDuct = fmap f <$> closeReadDuct rd }
+        fmap f rd = rd { readDuct = \mr -> fmap f <$> readDuct rd mr }
 
     -- | The write endpoint of a duct.
     data WriteDuct a = WriteDuct {
+                            writeAddOpens :: Int -> IO (),
                             writeDuct :: Maybe (IO ()) -> a -> IO Open,
                             closeWriteDuct :: IO () }
 
@@ -668,20 +666,28 @@ module Data.Conduit.Parallel.Internal.Duct(
                                     $ setContents Empty
                                 pure r
 
-    doCloseReadDuct :: forall a .
-                        StatusTVar a
-                        -> IO (Maybe a)
+    decrementCount :: TVar Int -> IO () -> IO ()
+    decrementCount cvar doClose = do
+        b <- atomically $ do
+                cnt <- readTVar cvar
+                if (cnt <= 0)
+                then error "Extra closes!"
+                else do
+                    let !c2 = cnt - 1
+                    writeTVar cvar c2
+                    pure $ c2 == 0
+        when b $ doClose
+
+    doCloseReadDuct :: forall a .  StatusTVar a -> IO ()
     doCloseReadDuct tvar = atomically $ do
         ms :: IsClosed (Status a) <- readTVar tvar
         case ms of
-            IsClosed -> pure Nothing
+            IsClosed -> pure ()
             IsOpen s -> do
                 writeTVar tvar IsClosed
                 closeAll (view readers s)
                 closeAll (view writers s)
-                pure $ case view contents s of
-                            Empty -> Nothing
-                            Full a -> Just a
+                pure ()
 
     doWriteDuct :: forall a .
                     StatusTVar a
@@ -733,7 +739,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                                                 ++ "full duct."
 
 
-    doCloseWriteDuct :: forall a .  StatusTVar a -> IO ()
+    doCloseWriteDuct :: forall a . StatusTVar a -> IO ()
     doCloseWriteDuct tvar = atomically $ do
         ms :: IsClosed (Status a) <- readTVar tvar
         case ms of
@@ -750,42 +756,59 @@ module Data.Conduit.Parallel.Internal.Duct(
                         writeTVar tvar (IsOpen s3)
                         closeAll (view writers s)
 
-    makeDuct :: forall a . StatusTVar a -> (ReadDuct a, WriteDuct a)
-    makeDuct tvar = (rd, wd)
-        where
-            rd :: ReadDuct a
-            rd = ReadDuct {
-                    readDuct = doReadDuct tvar,
-                    closeReadDuct = doCloseReadDuct tvar }
-            wd :: WriteDuct a
-            wd = WriteDuct {
-                    writeDuct = doWriteDuct tvar,
-                    closeWriteDuct = doCloseWriteDuct tvar }
 
-    makeStatus :: forall a . Contents a -> IsClosed (Status a)
-    makeStatus r = IsOpen $
+    addOpens :: TVar Int -> Int -> IO ()
+    addOpens cvar cnt
+        | cnt <= 0  = error "addOpens: non-positive count!"
+        | otherwise = atomically $ do
+            c <- readTVar cvar
+            let !c2 = c + cnt
+            writeTVar cvar c2
+
+    makeDuct :: forall a . Contents a -> IO (ReadDuct a, WriteDuct a)
+    makeDuct cnts = do
+        let makeStatus :: IsClosed (Status a)
+            makeStatus = IsOpen $
                         Status {
                             sReadersQueue = mempty,
                             sWritersQueue = mempty,
                             sWriteClosed = False,
-                            sContents = r }
+                            sContents = cnts }
+        tvar <- newTVarIO makeStatus
+        rcnt <- newTVarIO 1
+        wcnt <- newTVarIO 1
+        let rd :: ReadDuct a
+            rd = ReadDuct {
+                    readAddOpens = addOpens rcnt,
+                    readDuct = doReadDuct tvar,
+                    closeReadDuct = decrementCount rcnt
+                                        (doCloseReadDuct tvar) }
+            wd :: WriteDuct a
+            wd = WriteDuct {
+                    writeAddOpens = addOpens wcnt,
+                    writeDuct = doWriteDuct tvar,
+                    closeWriteDuct = decrementCount wcnt
+                                        (doCloseWriteDuct tvar) }
+        pure (rd, wd)
+
 
     newDuct :: forall a .  IO (ReadDuct a, WriteDuct a)
-    newDuct = makeDuct <$> newTVarIO (makeStatus Empty) 
+    newDuct = makeDuct Empty
 
-    newFullDuct :: forall a .
-                    a -> IO (ReadDuct a, WriteDuct a)
-    newFullDuct a = makeDuct <$> newTVarIO (makeStatus (Full a))
+    newFullDuct :: forall a .  a -> IO (ReadDuct a, WriteDuct a)
+    newFullDuct a = makeDuct $ Full a
 
-    newClosedDuct :: forall a . IO (ReadDuct a, WriteDuct a)
-    newClosedDuct = pure (rd, wd)
+    newClosedDuct :: forall a . (ReadDuct a, WriteDuct a)
+    newClosedDuct = (rd, wd)
         where
             rd :: ReadDuct a
             rd = ReadDuct {
+                    readAddOpens = \_ -> pure (),
                     readDuct = \_ -> pure Nothing,
-                    closeReadDuct = pure Nothing }
+                    closeReadDuct = pure () }
             wd :: WriteDuct a
             wd = WriteDuct {
+                    writeAddOpens = \_ -> pure (),
                     writeDuct = \_ -> const (pure Closed),
                     closeWriteDuct = pure () }
 
@@ -795,37 +818,37 @@ module Data.Conduit.Parallel.Internal.Duct(
                     -> WriteDuct a
     contramapIO f wd = wd { writeDuct = \mr -> f >=> writeDuct wd mr }
 
-
-    -- | Create a sharable read duct with a common close.
-    --
-    -- Creates a new read duct with a no-op close function.  When the
-    -- block exits, either via a normal return or via an exception,
-    -- the original read duct is closed.
-    --
-    commonReadClose :: forall a r m .
+    withReadDuct :: forall a b m .
                         MonadUnliftIO m
                         => ReadDuct a
-                        -> (ReadDuct a -> m r)
-                        -> m r
-    commonReadClose rd =
-        UnliftIO.bracket
-            (pure $ rd { closeReadDuct = pure Nothing })
-            (\_ -> do
-                _ <- liftIO $ closeReadDuct rd
-                pure ())
+                        -> Maybe (IO ())
+                        -> (IO (Maybe a) -> m b)
+                        -> m b
+    withReadDuct rd mio act =
+        UnliftIO.finally
+            (act (readDuct rd mio))
+            (liftIO (closeReadDuct rd))
 
-    -- | Create a sharable read duct with a common close.
-    --
-    -- Creates a new read duct with a no-op close function.  When the
-    -- block exits, either via a normal return or via an exception,
-    -- the original read duct is closed.
-    --
-    commonWriteClose :: forall a r m .
+    withWriteDuct :: forall a b m .
                         MonadUnliftIO m
                         => WriteDuct a
-                        -> (WriteDuct a -> m r)
-                        -> m r
-    commonWriteClose wd =
-        UnliftIO.bracket
-            (pure $ wd { closeWriteDuct = pure () })
-            (\_ -> liftIO $ closeWriteDuct wd)
+                        -> Maybe (IO ())
+                        -> ((a -> IO Open) -> m b)
+                        -> m b
+    withWriteDuct wd mio act =
+        UnliftIO.finally
+            (act (writeDuct wd mio))
+            (liftIO (closeWriteDuct wd))
+
+    -- | Add opens to a read duct.
+    addReadOpens :: forall a . ReadDuct a -> Int -> IO ()
+    addReadOpens rd n
+        | n <= 0    = error "addReadOpens: non-positive count!"
+        | otherwise = readAddOpens rd n
+
+    -- | Add opens to a write duct.
+    addWriteOpens :: forall a . WriteDuct a -> Int -> IO ()
+    addWriteOpens wd n
+        | n <= 0    = error "addWriteOpens: non-positive count!"
+        | otherwise = writeAddOpens wd n
+

@@ -32,10 +32,15 @@ module Data.Conduit.Parallel (
     fixP,
 
     -- ** Caching
-    cache
+    cache,
+
+    -- * ParArrows
+    ParArrow,
+    toParConduit
 
 ) where
 
+    import           Data.Conduit.Parallel.Internal.Arrow
     import           Data.Conduit.Parallel.Internal.Cache
     import           Data.Conduit.Parallel.Internal.Circuit
     import           Data.Conduit.Parallel.Internal.Fuse

@@ -32,39 +32,6 @@ module Data.Conduit.Parallel.Internal.Circuit (
     import           Data.These
     import           UnliftIO
 
-    router :: forall m a b c .
-                MonadUnliftIO m
-                => (a -> These b c)
-                -> ReadDuct a
-                -> WriteDuct b
-                -> WriteDuct c
-                -> m ()
-    router f rda wrb wrc = do
-            ma <- liftIO $ readDuct rda Nothing
-            case ma of
-                Nothing -> closeAll
-                Just a  ->
-                    case f a of
-                        This b    -> doWrite wrb b (router f rda wrb wrc)
-                        That c    -> doWrite wrc c (router f rda wrb wrc)
-                        These b c ->
-                            doWrite wrb b
-                                (doWrite wrc c (router f rda wrb wrc))
-        where
-            closeAll :: m ()
-            closeAll = liftIO $ do
-                _ <- closeReadDuct rda
-                closeWriteDuct wrb
-                closeWriteDuct wrc
-                pure ()
-
-            doWrite :: forall y . WriteDuct y -> y -> m () -> m ()
-            doWrite wdy y next = do
-                r <- liftIO $ writeDuct wdy Nothing y
-                case r of
-                    Open -> next
-                    Closed -> closeAll
-                        
     baseRoute :: forall m a b c d r .
                     (MonadUnliftIO m
                     , Semigroup r)
@@ -83,7 +50,7 @@ module Data.Conduit.Parallel.Internal.Circuit (
                 (rdc, wrc) <- liftIO $ newDuct
                 mr1 <- getParConduit bcond rdb wdd
                 mr2 <- getParConduit ccond rdc wdd
-                mu  <- spawn $ router f rda wrb wrc
+                mu  <- spawnIO $ router f rda wrb wrc
                 pure $ do
                     () <- mu
                     r1 <- mr1
@@ -150,9 +117,10 @@ module Data.Conduit.Parallel.Internal.Circuit (
             go rdi wro = do
                 (rdi', wri') <- liftIO $ newDuct
                 (rde, wre) <- liftIO $ newDuct
+                liftIO $ addWriteOpens wri' 1
                 mr <- getParConduit inner rdi' wre
-                mcp :: m () <- spawn $ copier rdi wri' []
-                mrt :: m () <- spawn $ router f rde wri' wro
+                mcp :: m () <- spawnIO $ copier rdi wri'
+                mrt :: m () <- spawnIO $ router f rde wri' wro
                 pure $ mrt >> mcp >> mr
 
             f :: Either i o -> These i o

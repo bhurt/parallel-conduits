@@ -23,7 +23,6 @@ module Data.Conduit.Parallel.Internal.Parallel (
 
     import           Control.Monad.Cont
     import           Data.Conduit.Parallel.Internal.Duct
-    import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
     import           UnliftIO
 
@@ -50,16 +49,10 @@ module Data.Conduit.Parallel.Internal.Parallel (
             | otherwise = ParConduit go
         where
             go :: forall x . ReadDuct i -> WriteDuct o -> ContT x m (m r)
-            go rd wd = spawn $ controlThread rd wd
-
-            controlThread :: ReadDuct i -> WriteDuct o -> m r
-            controlThread rd' wd' = flip runContT id $ do
-                rd <- ContT $ commonReadClose rd'
-                wd <- ContT $ commonWriteClose wd'
-                let makeWorker :: ContT r m (m r)
-                    makeWorker = spawn (runContT (getParConduit inner rd wd) id)
-                    workers :: [ ContT r m (m r) ]
-                    workers = take num (repeat makeWorker)
-                rs :: [ m r ] <- sequence workers
+            go rd wd = do
+                liftIO $ do
+                    addReadOpens rd (num - 1)
+                    addWriteOpens wd (num - 1)
+                rs :: [ m r ] <-
+                    sequence . take num . repeat $ getParConduit inner rd wd
                 pure $ mconcat <$> sequence rs
-                

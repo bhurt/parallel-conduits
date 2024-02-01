@@ -34,6 +34,7 @@ Flag Devel
 library
   hs-source-dirs:      src
   exposed-modules:     Data.Conduit.Parallel
+                        , Data.Conduit.Parallel.Internal.Arrow
                         , Data.Conduit.Parallel.Internal.Cache
                         , Data.Conduit.Parallel.Internal.Circuit
                         , Data.Conduit.Parallel.Internal.Copier

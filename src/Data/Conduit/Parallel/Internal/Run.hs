@@ -22,16 +22,19 @@ module Data.Conduit.Parallel.Internal.Run (
 ) where
 
     import qualified Control.Monad.Cont                  as Cont
-    import           Control.Monad.IO.Class              (MonadIO (..))
     import qualified Data.Conduit.Parallel.Internal.Duct as Duct
     import           Data.Conduit.Parallel.Internal.Type (ParConduit (..))
     import           Data.Functor.Contravariant          (contramap)
     import           Data.Void                           (Void, absurd)
 
-    runParConduit :: forall m r . MonadIO m => ParConduit m r () Void -> m r
+    runParConduit :: forall m r . ParConduit m r () Void -> m r
     runParConduit pc = do
-        (rd, wd) <- liftIO $ Duct.newClosedDuct
-        let wd' = contramap absurd wd
+        let rd :: Duct.ReadDuct ()
+            (rd, _) = Duct.newClosedDuct
+            wd :: Duct.WriteDuct Void
+            (_, wd) = Duct.newClosedDuct
+            wd' :: Duct.WriteDuct Void
+            wd' = contramap absurd wd
         Cont.runContT (getParConduit pc rd wd') id
 
 

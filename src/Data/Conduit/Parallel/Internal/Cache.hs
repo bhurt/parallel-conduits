@@ -41,8 +41,8 @@ module Data.Conduit.Parallel.Internal.Cache (
             go rd wd = do
                 q <- liftIO $ newTBQueueIO n
                 closed <- liftIO $ newTVarIO False
-                mi <- spawn . liftIO $ loader rd q closed
-                mo <- spawn . liftIO $ unloader wd q closed
+                mi <- spawnIO $ loader rd q closed
+                mo <- spawnIO $ unloader wd q closed
                 pure $ mi >> mo
 
     loader :: forall i .
@@ -50,8 +50,11 @@ module Data.Conduit.Parallel.Internal.Cache (
                 -> TBQueue i
                 -> TVar Bool
                 -> IO ()
-    loader rd q closed = do
-                r <- readDuct rd Nothing
+    loader src q closed = withReadDuct src Nothing loop
+        where
+            loop :: IO (Maybe i) -> IO ()
+            loop rd = do
+                r <- rd
                 case r of
                     Nothing -> do
                         atomically $ writeTVar closed True
@@ -59,12 +62,9 @@ module Data.Conduit.Parallel.Internal.Cache (
                     Just a -> do
                         isClosed <- atomically $ loadVar a
                         if (isClosed)
-                        then do
-                            _ <- closeReadDuct rd
-                            pure ()
-                        else
-                            loader rd q closed
-        where
+                        then pure ()
+                        else loop rd
+
             loadVar :: i -> STM Bool
             loadVar a = do
                 isClosed <- readTVar closed
@@ -79,20 +79,19 @@ module Data.Conduit.Parallel.Internal.Cache (
                 -> TBQueue i
                 -> TVar Bool
                 -> IO ()
-    unloader wd q closed = do
-            mi <- atomically unloadVar
-            case mi of
-                Nothing -> do
-                    closeWriteDuct wd
-                    pure ()
-                Just i -> do
-                    r <- writeDuct wd Nothing i
-                    case r of
-                        Closed -> do
-                            atomically $ writeTVar closed True
-                            pure ()
-                        Open   -> unloader wd q closed
+    unloader snk q closed = withWriteDuct snk Nothing loop
         where
+            loop :: (i -> IO Open) -> IO ()
+            loop wd = do
+                mi <- atomically unloadVar
+                case mi of
+                    Nothing -> pure ()
+                    Just i -> do
+                        r <- wd i
+                        case r of
+                            Closed -> pure ()
+                            Open   -> loop wd
+
             unloadVar :: STM (Maybe i)
             unloadVar = do
                 mi <- tryReadTBQueue q

@@ -18,44 +18,92 @@
 -- notice.  Use at your own risk.
 --
 module Data.Conduit.Parallel.Internal.Copier (
-    copier
+    copier,
+    duplicator,
+    router
 ) where
 
-    import           Control.Monad.Cont
     import           Data.Conduit.Parallel.Internal.Duct
-    import           UnliftIO
+    import           Data.These
 
-    copier :: forall a m r .
-                (MonadUnliftIO m
-                , Monoid r)
-                => ReadDuct a
+    doRead :: forall a .
+                IO (Maybe a)
+                -> (a -> IO ())
+                -> IO ()
+    doRead rd go = do
+        ma <- rd
+        case ma of
+            Nothing -> pure ()
+            Just a  -> go a
+
+    doWrite1 :: forall a .
+                    (a -> IO Open)
+                    -> IO ()
+                    -> a
+                    -> IO ()
+    doWrite1 wd onOpen v = do
+        o <- wd v
+        case o of
+            Open   -> onOpen
+            Closed -> pure ()
+
+    doWrite2 :: forall a b .
+                (a -> IO Open)
+                -> (b -> IO Open)
+                -> IO ()
+                -> a
+                -> b
+                -> IO ()
+    doWrite2 wda wdb go a b = do
+        oa <- wda a
+        ob <- wdb b
+        if (oa == Open) && (ob == Open)
+        then go
+        else pure ()
+
+
+    copier :: forall a .
+                ReadDuct a
                 -> WriteDuct a
-                -> [ WriteDuct a ]
-                -> m r
-    copier rd wd1 wds = liftIO $ finally (loop (wd1 : wds)) closeAll
-        where
-            loop :: [ WriteDuct a ] -> IO r
-            loop [] = pure mempty
-            loop ws = do
-                mr :: Maybe a <- readDuct rd Nothing
-                case mr of
-                    Nothing -> pure mempty
-                    Just r -> doWrites r ws []
+                -> IO ()
+    copier src snk = do
+        withReadDuct src Nothing $ \rd ->
+            withWriteDuct snk Nothing $ \wd ->
+                let loop :: IO ()
+                    loop = doRead rd $ doWrite1 wd loop
+                in
+                loop
 
-            doWrites :: a
-                        -> [ WriteDuct a ]
-                        -> [ WriteDuct a ]
-                        -> IO r
-            doWrites _ []       rs = loop $ reverse rs
-            doWrites r (w : ws) rs = do
-                o :: Open <- writeDuct w Nothing r
-                case o of
-                    Closed -> doWrites r ws rs
-                    Open   -> doWrites r ws (w : rs)
+    duplicator :: forall a .
+                    ReadDuct a
+                    -> WriteDuct a
+                    -> WriteDuct a
+                    -> IO ()
+    duplicator src snk1 snk2 =
+        withReadDuct src Nothing $ \rd ->
+            withWriteDuct snk1 Nothing $ \wd1 ->
+                withWriteDuct snk2 Nothing $ \wd2 ->
+                    let loop :: IO ()
+                        loop = doRead rd $ \v -> doWrite2 wd1 wd2 loop v v
+                    in
+                    loop
 
-            closeAll :: IO ()
-            closeAll = do
-                _ <- closeReadDuct rd
-                closeWriteDuct wd1
-                mapM_ closeWriteDuct wds
-
+    router :: forall a b c .
+                (a -> These b c)
+                -> ReadDuct a
+                -> WriteDuct b
+                -> WriteDuct c
+                -> IO ()
+    router f srca snkb snkc = do
+        withReadDuct srca Nothing $ \rda ->
+            withWriteDuct snkb Nothing $ \wdb ->
+                withWriteDuct snkc Nothing $ \wdc ->
+                    let loop :: IO ()
+                        loop =
+                            doRead rda $ \a ->
+                                case f a of
+                                    This b    -> doWrite1 wdb loop b
+                                    That c    -> doWrite1 wdc loop c
+                                    These b c -> doWrite2 wdb wdc loop b c
+                    in
+                    loop
