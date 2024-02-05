@@ -25,7 +25,9 @@ module DuctTest(
                     testWriteClosing1,
                     testReadClosing2,
                     testWriteClosing2,
-                    testReadBlocks
+                    testReadBlocks,
+                    testWriteBlocks,
+                    testReadQueues
                 ]
 
     -- | The monad we run tests in.
@@ -214,18 +216,31 @@ module DuctTest(
     --
     -- This lifts a `readDuct` call up into a ThreadM, and compares
     -- the result it gets to an expected value.
-    doRead :: forall a . Eq a => IO (Maybe a) -> Maybe a -> ThreadM ()
+    doRead :: forall a . (Show a, Eq a) => IO (Maybe a) -> Maybe a -> ThreadM ()
     doRead rd val = do
         val1 :: Maybe a <- liftIO rd
+        if (val1 /= val)
+        then
+            liftIO . putStrLn $  "doRead failed: expected " ++ show val
+                                    ++ " but got " ++ show val1
+        else pure ()
         attest $ (val1 == val)
 
     -- | Do a write.
     --
     -- This lifts  a `writeDuct` up into a ThreadM, and compares
     -- the result it gets to an expected value.
-    doWrite :: forall a . (a -> IO Open) -> a -> Open -> ThreadM ()
+    doWrite :: forall a . Show a => (a -> IO Open) -> a -> Open -> ThreadM ()
     doWrite wd val res = do
         r <- liftIO $ wd val
+        if (r /= res)
+        then
+            liftIO . putStrLn $ "doWrite failed: expected "
+                                    ++ show res
+                                    ++ " but got "
+                                    ++ show r
+                                    ++ " writing " ++ show val
+        else pure ()
         attest $ r == res
 
     {-
@@ -305,7 +320,7 @@ module DuctTest(
 
     -- | If we create an empty duct, a read blocks until a write happens.
     testReadBlocks :: Test
-    testReadBlocks = runTestM "testReadBlock" $ do
+    testReadBlocks = runTestM "testReadBlocks" $ do
             (src, snk) <- liftIO $ newDuct
             _ <- waitForBlock $ spawn $ readSide src
             _ <- noWaitForBlock $ spawn $ writeSide snk
@@ -313,13 +328,53 @@ module DuctTest(
         where
             readSide :: ReadDuct Int -> ThreadM ()
             readSide src =
-                withRead src $ \rd -> do
-                    doRead rd (Just 1)
-                    doRead rd Nothing
+                withRead src $ \rd -> doRead rd (Just 1)
 
             writeSide :: WriteDuct Int -> ThreadM ()
             writeSide snk =
                 withWrite snk $ \wd -> doWrite wd 1 Open
+
+    -- | If we create a full duct, writes block until a read happens.
+    testWriteBlocks :: Test
+    testWriteBlocks = runTestM "testWriteBlocks" $ do
+            (src, snk) <- liftIO $ newFullDuct (1 :: Int)
+            liftIO $ addReadOpens src 1
+            _ <- waitForBlock $ spawn $ writeSide snk
+            _ <- noWaitForBlock $ spawn $ readSide src
+            pure ()
+        where
+            readSide :: ReadDuct Int -> ThreadM ()
+            readSide src =
+                withRead src $ \rd -> doRead rd (Just 1)
+
+            writeSide :: WriteDuct Int -> ThreadM ()
+            writeSide snk =
+                withWrite snk $ \wd -> doWrite wd 2 Open
+
+    -- | If we pile up multiple reads on an empty queue, they all block
+    -- until writes happen, and then they are satisified in order.
+    testReadQueues :: Test
+    testReadQueues = runTestM "testReadUqueues" $ do
+            (src, snk) :: (ReadDuct Int, WriteDuct Int) <- liftIO $ newDuct
+            liftIO $ addReadOpens src 2
+            _ <- waitForBlock $ spawn $ readSide src 1
+            _ <- waitForBlock $ spawn $ readSide src 2
+            _ <- waitForBlock $ spawn $ readSide src 3
+            _ <- noWaitForBlock $ spawn $ writeSide snk
+            pure ()
+        where
+            readSide :: ReadDuct Int -> Int -> ThreadM ()
+            readSide src v = withRead src $ \rd -> doRead rd (Just v)
+
+            writeSide :: WriteDuct Int -> ThreadM ()
+            writeSide snk = withWrite snk $ \wd -> do
+                doWrite wd 1 Open
+                doWrite wd 2 Open
+                doWrite wd 3 Open
+
+
+        
+
         
 
 
@@ -331,22 +386,6 @@ module DuctTest(
 
 
 {-
-    testReadBlocks :: Test
-    testReadBlocks = runTestM "testReadBlocks" $ do
-            (rd, wd) <- liftIO $ newDuct
-            _ <- waitForBlock $ spawn $ readSide rd
-            _ <- noWaitForBlock $ spawn $ writeSide wd
-            pure ()
-        where
-            readSide :: ReadDuct Int -> ThreadM ()
-            readSide rd = do
-                doRead rd (Just 1)
-                doCloseRead rd Nothing
-
-            writeSide :: WriteDuct Int -> ThreadM ()
-            writeSide wd = do
-                doWrite wd 1 Open
-                doCloseWrite wd
 
     testReadQueues :: Test
     testReadQueues = runTestM "testReadQueues" $ do
