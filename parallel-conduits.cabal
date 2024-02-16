@@ -83,6 +83,7 @@ test-suite parallel-haskell-testsuite
     type:               exitcode-stdio-1.0
     main-is:            Main.hs
     other-modules:      DuctTest
+                        , DuctInfra
     hs-source-dirs:     test
     build-depends:      base >= 4.7 && < 5
                         , async
