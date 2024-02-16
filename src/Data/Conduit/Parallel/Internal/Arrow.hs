@@ -199,6 +199,11 @@ module Data.Conduit.Parallel.Internal.Arrow (
                 g (That d) = d
                 g _ = error "Impossible state reached!"
 
+    instance MonadUnliftIO m => ArrowLoop (ParArrow m) where
+        loop :: forall b c d .
+                    ParArrow m (b, d) (c, d)
+                    -> ParArrow m b c
+        loop inner = ParArrow $ aLoop (getParArrow inner)
 
     -- | Convert a ParArrow to a ParConduit
     --

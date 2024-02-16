@@ -36,7 +36,8 @@ module Data.Conduit.Parallel (
 
     -- * ParArrows
     ParArrow,
-    toParConduit
+    toParConduit,
+    liftK
 
 ) where
 
