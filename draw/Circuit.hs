@@ -1,8 +1,6 @@
 
 module Circuit (
-    routeEither,
-    routeThese,
-    routeTuple,
+    routeSvg,
     fixP
 ) where
 
@@ -10,17 +8,11 @@ module Circuit (
     import           Rect
     import           Render
     import           Route
-    import           Text.Blaze.Internal (MarkupM)
     import           Text.Blaze.Svg11    (Svg)
     import           Types
 
-    data Base = Base {
-                    splitPoint :: Point,
-                    inputPoint :: Point
-                }
-
-    baseRoute :: MarkupM Base
-    baseRoute = do
+    routeSvg :: Svg
+    routeSvg = do
         let mboxLabels = defaultMainBoxLabels {
                                 inputLabel = "",
                                 outputLabel = "c",
@@ -62,31 +54,15 @@ module Circuit (
         polyline sp5 [ makeStep X sp5 joinPt, makeStep Y sp5 joinPt ]
 
         route joinPt [ makeStep X joinPt (outputAnchor mbox) ]
-        pure $ Base {
-                splitPoint = move West 20 splitPt,
-                inputPoint = move West 20 (inputAnchor mbox) }
 
+        let splitPoint :: Point
+            splitPoint = move West 20 splitPt
 
-    routeEither :: Svg
-    routeEither = do
-        base <- baseRoute
-        text' 20  (move East 30 (inputPoint base)) "Either a b"
-        let pt1 = move East 75 $ inputPoint base
-        route pt1 [ makeStep X pt1 (splitPoint base) ]
-
-    routeThese :: Svg
-    routeThese = do
-        base <- baseRoute
-        text' 20  (move East 30 (inputPoint base)) "These a b"
-        let pt1 = move East 75 $ inputPoint base
-        route pt1 [ makeStep X pt1 (splitPoint base) ]
-
-    routeTuple :: Svg
-    routeTuple = do
-        base <- baseRoute
-        text' 20  (move East 30 (inputPoint base)) "(a, b)"
-        let pt1 = move East 75 $ inputPoint base
-        route pt1 [ makeStep X pt1 (splitPoint base) ]
+            inputPoint :: Point
+            inputPoint = move West 20 (inputAnchor mbox)
+        text (move East 30 inputPoint) "f a b"
+        let pt1 = move East 65 inputPoint 
+        route pt1 [ makeStep X pt1 splitPoint ]
 
 
     fixP :: Svg

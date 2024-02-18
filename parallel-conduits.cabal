@@ -21,9 +21,7 @@ extra-doc-files:     docs/fuse.svg
                         , docs/merge.svg
                         , docs/parallel.svg
                         , docs/proFunctor.svg
-                        , docs/routeEither.svg
-                        , docs/routeThese.svg
-                        , docs/routeTuple.svg
+                        , docs/route.svg
                         , docs/simple.svg
                         , docs/tee.svg
 
@@ -34,7 +32,6 @@ Flag Devel
 library
   hs-source-dirs:      src
   exposed-modules:     Data.Conduit.Parallel
-                        , Data.Conduit.Parallel.Internal.AUtils
                         , Data.Conduit.Parallel.Internal.Arrow
                         , Data.Conduit.Parallel.Internal.Cache
                         , Data.Conduit.Parallel.Internal.Circuit
@@ -47,20 +44,17 @@ library
                         , Data.Conduit.Parallel.Internal.Spawn
                         , Data.Conduit.Parallel.Internal.Tee
                         , Data.Conduit.Parallel.Internal.Type
+                        , Data.Conduit.Parallel.Internal.Utils
   build-depends:       base >= 4.7 && < 5
                         , conduit
                         , containers
                         , mtl
                         , profunctors
                         , stm
-                        , these
                         , transformers
                         , unliftio
                         , unliftio-core
                         -- , selective
-                        -- , lifted-base
-                        -- , monad-control
-                        -- , witherable
   default-language:    Haskell2010
   if flag(devel)
     ghc-options:       -O0

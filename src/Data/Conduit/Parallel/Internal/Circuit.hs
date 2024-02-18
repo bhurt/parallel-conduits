@@ -18,95 +18,56 @@
 -- notice.  Use at your own risk.
 --
 module Data.Conduit.Parallel.Internal.Circuit (
-    routeEither,
-    routeThese,
-    routeTuple,
+    route,
     fixP
 ) where
 
     import           Control.Monad.Cont
+    import           Data.Bitraversable
     import           Data.Conduit.Parallel.Internal.Copier
     import           Data.Conduit.Parallel.Internal.Duct
     import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
-    import           Data.These
     import           UnliftIO
 
-    baseRoute :: forall m a b c d r .
+    -- | Split the input into two different ParConduits.
+    --
+    -- ![image](docs/route.svg)
+    -- 
+    route :: forall m r i1 i2 o f .
                     (MonadUnliftIO m
-                    , Semigroup r)
-                    => (a -> These b c)
-                    -> ParConduit m r b d
-                    -> ParConduit m r c d
-                    -> ParConduit m r a d
-    baseRoute f bcond ccond = ParConduit go
+                    , Semigroup r
+                    , Bitraversable f)
+                    => ParConduit m r i1 o
+                    -> ParConduit m r i2 o
+                    -> ParConduit m r (f i1 i2) o
+    route pc1 pc2 = ParConduit go
         where
             go :: forall x .
-                    ReadDuct a
-                    -> WriteDuct d
+                    ReadDuct (f i1 i2)
+                    -> WriteDuct o
                     -> ContT x m (m r)
-            go rda wdd = do
-                (rdb, wrb) <- liftIO $ newDuct
-                (rdc, wrc) <- liftIO $ newDuct
-                mr1 <- getParConduit bcond rdb wdd
-                mr2 <- getParConduit ccond rdc wdd
-                mu  <- spawnIO $ router f rda wrb wrc
+            go rdf wdo = do
+                (rdi1, wdi1) <- liftIO $ newDuct
+                (rdi2, wdi2) <- liftIO $ newDuct
+                liftIO $ addWriteOpens wdo 1
+                mr1 <- getParConduit pc1 rdi1 wdo
+                mr2 <- getParConduit pc2 rdi2 wdo
+                mu  <- spawnIO $ direct rdf wdi1 wdi2
                 pure $ do
                     () <- mu
                     r1 <- mr1
                     r2 <- mr2
                     pure $ r1 <> r2
 
-    -- | Route to either of two sub-parconduits.
-    --
-    -- ![image](docs/routeEither.svg)
-    -- 
-    routeEither :: forall m a b c r .
-                    (MonadUnliftIO m
-                    , Semigroup r)
-                    => ParConduit m r a c
-                    -> ParConduit m r b c
-                    -> ParConduit m r (Either a b) c
-    routeEither = baseRoute f
-        where
-            f :: Either a b -> These a b
-            f (Left a)  = This a
-            f (Right b) = That b
-
-    -- | Route to either or both of two sub-parconduits.
-    --
-    -- ![image](docs/routeThese.svg)
-    -- 
-    routeThese :: forall m a b c r .
-                    (MonadUnliftIO m
-                    , Semigroup r)
-                    => ParConduit m r a c
-                    -> ParConduit m r b c
-                    -> ParConduit m r (These a b) c
-    routeThese = baseRoute id
-
-    -- | Route to both of two sub-parconduits.
-    --
-    -- ![image](docs/routeTuple.svg)
-    -- 
-    routeTuple :: forall m a b c r .
-                    (MonadUnliftIO m
-                    , Semigroup r)
-                    => ParConduit m r a c
-                    -> ParConduit m r b c
-                    -> ParConduit m r (a, b) c
-    routeTuple = baseRoute f
-        where
-            f :: (a, b) -> These a b
-            f (a, b) = These a b
-
     -- | Feed outputs back in as inputs.
     --
     -- ![image](docs/fixP.svg)
     -- 
-    fixP :: forall m i o r .
-                MonadUnliftIO m
-                => ParConduit m r i (Either i o)
+    fixP :: forall m i o r f .
+                (MonadUnliftIO m
+                , Bitraversable f)
+                => ParConduit m r i (f i o)
                 -> ParConduit m r i o
     fixP inner = ParConduit go
         where
@@ -115,14 +76,11 @@ module Data.Conduit.Parallel.Internal.Circuit (
                     -> WriteDuct o
                     -> ContT x m (m r)
             go rdi wro = do
-                (rdi', wri') <- liftIO $ newDuct
-                (rde, wre) <- liftIO $ newDuct
-                liftIO $ addWriteOpens wri' 1
-                mr <- getParConduit inner rdi' wre
-                mcp :: m () <- spawnIO $ copier rdi wri'
-                mrt :: m () <- spawnIO $ router f rde wri' wro
-                pure $ mrt >> mcp >> mr
+                (rdf, wdf) <- liftIO $ newDuct
+                (rdi', wdi') <- liftIO $ newDuct
+                liftIO $ addWriteOpens wdi' 1
+                m1 <- spawnIO $ direct rdf wdi' wro
+                m2 <- spawnIO $ copier rdi wdi'
+                mr <- getParConduit inner rdi' wdf
+                pure $ m1 >> m2 >> mr
 
-            f :: Either i o -> These i o
-            f (Left i)  = This i
-            f (Right o) = That o

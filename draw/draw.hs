@@ -70,8 +70,6 @@ main = do
     writeSVG (odir </> "parallel.svg") parallel
     writeSVG (odir </> "tee.svg") tee
     writeSVG (odir </> "merge.svg") merge
-    writeSVG (odir </> "routeEither.svg") routeEither
-    writeSVG (odir </> "routeThese.svg") routeThese
-    writeSVG (odir </> "routeTuple.svg") routeTuple
+    writeSVG (odir </> "route.svg") routeSvg
     writeSVG (odir </> "fixP.svg") fixP
     putStrLn "Done."

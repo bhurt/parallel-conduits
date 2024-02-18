@@ -26,9 +26,7 @@ module Data.Conduit.Parallel (
     parallel,
     tee,
     merge,
-    routeEither,
-    routeThese,
-    routeTuple,
+    route,
     fixP,
 
     -- ** Caching
@@ -37,7 +35,9 @@ module Data.Conduit.Parallel (
     -- * ParArrows
     ParArrow,
     toParConduit,
-    liftK
+    liftK,
+    wrapA,
+    routeA
 
 ) where
 

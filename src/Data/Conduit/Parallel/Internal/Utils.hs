@@ -3,8 +3,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
--- Module      : Data.Conduit.Parallel.Internal.AUtils
--- Description : Arrow Utils
+-- Module      : Data.Conduit.Parallel.Internal.Utils
+-- Description : General Utils
 -- Copyright   : (c) Brian Hurt, 2024
 -- License     : BSD 3-clause
 -- Maintainer  : bhurt42@gmail.com
@@ -19,7 +19,7 @@
 -- is for internal use only, and will change or disappear without
 -- notice.  Use at your own risk.
 --
-module Data.Conduit.Parallel.Internal.AUtils (
+module Data.Conduit.Parallel.Internal.Utils (
     readM,
     writeM,
     runM,

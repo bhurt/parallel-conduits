@@ -22,7 +22,7 @@
 module Data.Conduit.Parallel.Internal.Arrow (
     ParArrow(..),
     wrapA,
-    wrapA2,
+    routeA,
     toParConduit,
     liftK
 ) where
@@ -32,12 +32,12 @@ module Data.Conduit.Parallel.Internal.Arrow (
     import           Control.Monad.Cont                    (ContT, lift)
     import           Control.Monad.Trans.Maybe
     import           Data.Bitraversable
-    import           Data.Conduit.Parallel.Internal.AUtils
     import           Data.Conduit.Parallel.Internal.Copier (copier)
     import           Data.Conduit.Parallel.Internal.Duct
     import           Data.Conduit.Parallel.Internal.Flip
     import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
+    import           Data.Conduit.Parallel.Internal.Utils
     import qualified Data.Functor.Contravariant            as Contra
     import qualified Data.Profunctor                       as Pro
     import           Data.Void
@@ -101,13 +101,13 @@ module Data.Conduit.Parallel.Internal.Arrow (
                         in
                         runM recur
 
-    wrapA2 :: forall m i1 i2 o1 o2 f .
+    routeA :: forall m i1 i2 o1 o2 f .
                 (MonadUnliftIO m
                 , Bitraversable f)
                 => ParArrow m i1 o1
                 -> ParArrow m i2 o2
                 -> ParArrow m (f i1 i2) (f o1 o2)
-    wrapA2 pa1 pa2 = ParArrow go
+    routeA pa1 pa2 = ParArrow go
         where
             go :: forall x .
                     ReadDuct (f i1 i2)
@@ -250,13 +250,13 @@ module Data.Conduit.Parallel.Internal.Arrow (
                     ParArrow m b c
                     -> ParArrow m b' c'
                     -> ParArrow m (b, b') (c, c')
-        p1 *** p2 = wrapA2 p1 p2
+        p1 *** p2 = routeA p1 p2
 
         (&&&) :: forall b c c' .
                     ParArrow m b c
                     -> ParArrow m b c'
                     -> ParArrow m b (c, c')
-        p1 &&& p2 = Pro.lmap (\b -> (b, b)) $ wrapA2 p1 p2
+        p1 &&& p2 = Pro.lmap (\b -> (b, b)) $ routeA p1 p2
 
     instance MonadUnliftIO m => ArrowChoice (ParArrow m) where
 
@@ -274,14 +274,14 @@ module Data.Conduit.Parallel.Internal.Arrow (
                     ParArrow m b c
                     -> ParArrow m b' c'
                     -> ParArrow m (Either b b') (Either c c')
-        pa1 +++ pa2 = wrapA2 pa1 pa2
+        pa1 +++ pa2 = routeA pa1 pa2
 
 
         (|||) :: forall b c d .
                     ParArrow m b d
                     -> ParArrow m c d
                     -> ParArrow m (Either b c) d
-        pa1 ||| pa2 = fmap go $ wrapA2 pa1 pa2
+        pa1 ||| pa2 = fmap go $ routeA pa1 pa2
             where
                 go :: Either d d -> d
                 go (Left d)  = d
@@ -289,7 +289,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
 
     instance MonadUnliftIO m => Applicative (ParArrow m a) where
         pure a = liftK . Kleisli $ \_ -> pure a
-        pa1 <*> pa2 = Pro.dimap (\i -> (i, i)) (\(f, o) -> f o) $ wrapA2 pa1 pa2
+        pa1 <*> pa2 = Pro.dimap (\i -> (i, i)) (\(f, o) -> f o) $ routeA pa1 pa2
 
     instance MonadUnliftIO m => ArrowLoop (ParArrow m) where
         loop :: forall b c d .
