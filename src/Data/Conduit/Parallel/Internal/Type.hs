@@ -21,7 +21,11 @@
 --
 module Data.Conduit.Parallel.Internal.Type (
     ParConduit(..),
-    fuseBase
+    fuse,
+    fuseLeft,
+    fuseTuple,
+    fuseSemigroup,
+    fuseMap
 ) where
 
     import qualified Control.Category                      as Cat
@@ -70,14 +74,13 @@ module Data.Conduit.Parallel.Internal.Type (
     --
     -- ![image](docs/fuseMap.svg)
     --
-    fuseBase :: forall r1 r2 r m i o x .
+    fuseMap :: forall r1 r2 r m i o x .
                     (MonadIO m)
-                    => (Duct.WriteDuct x -> Duct.WriteDuct x)
-                    -> (r1 -> r2 -> r)
+                    => (r1 -> r2 -> r)
                     -> ParConduit m r1 i x
                     -> ParConduit m r2 x o
                     -> ParConduit m r i o
-    fuseBase modWrite fixr pc1 pc2 = ParConduit go
+    fuseMap fixr pc1 pc2 = ParConduit go
         where
             go :: forall t .
                     Duct.ReadDuct i
@@ -85,9 +88,7 @@ module Data.Conduit.Parallel.Internal.Type (
                     -> ContT t m (m r)
             go rd wd = do
                 (xrd, xwd) <- liftIO $ Duct.newDuct
-                let xwd' :: Duct.WriteDuct x
-                    xwd' = modWrite xwd
-                r1 <- getParConduit pc1 rd xwd'
+                r1 <- getParConduit pc1 rd xwd
                 r2 <- getParConduit pc2 xrd wd
                 pure $ fixr <$> r1 <*> r2
 
@@ -103,4 +104,51 @@ module Data.Conduit.Parallel.Internal.Type (
                                     copier rd wr
                                     pure mempty
 
-        (.) = flip $ fuseBase Prelude.id mappend
+        (.) = flip $ fuseMap mappend
+
+    -- | Fuse two parallel conduits, returning the second result.
+    --
+    -- ![image](docs/fuse.svg)
+    --
+    fuse :: forall r m i o x .
+                    MonadIO m
+                    => ParConduit m () i x
+                    -> ParConduit m r x o
+                    -> ParConduit m r i o
+    fuse = fuseMap (\() r -> r)
+
+    -- | Fuse two parallel conduits, returning the first result.
+    --
+    -- ![image](docs/fuseLeft.svg)
+    --
+    fuseLeft :: forall r m i o x .
+                    MonadIO m
+                    => ParConduit m r i x
+                    -> ParConduit m () x o
+                    -> ParConduit m r i o
+    fuseLeft = fuseMap (\r () -> r)
+
+    -- | Fuse two parallel conduits, constructing a tuples of the results.
+    --
+    -- ![image](docs/fuseTuple.svg)
+    --
+    fuseTuple :: forall r1 r2 m i o x .
+                    MonadIO m
+                    => ParConduit m r1 i x
+                    -> ParConduit m r2 x o
+                    -> ParConduit m (r1, r2) i o
+    fuseTuple = fuseMap (\r1 r2 -> (r1, r2))
+
+
+    -- | Fuse two parallel conduits, appending the two results.
+    --
+    -- ![image](docs/fuseSemigroup.svg)
+    --
+    fuseSemigroup :: forall r m i o x .
+                        (MonadIO m
+                        , Semigroup r)
+                        => ParConduit m r i x
+                        -> ParConduit m r x o
+                        -> ParConduit m r i o
+    fuseSemigroup = fuseMap (<>)
+

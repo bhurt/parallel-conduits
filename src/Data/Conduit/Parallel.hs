@@ -44,7 +44,6 @@ module Data.Conduit.Parallel (
     import           Data.Conduit.Parallel.Internal.Arrow
     import           Data.Conduit.Parallel.Internal.Cache
     import           Data.Conduit.Parallel.Internal.Circuit
-    import           Data.Conduit.Parallel.Internal.Fuse
     import           Data.Conduit.Parallel.Internal.LiftC
     import           Data.Conduit.Parallel.Internal.Parallel
     import           Data.Conduit.Parallel.Internal.Type

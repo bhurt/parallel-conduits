@@ -41,7 +41,6 @@ library
                         , Data.Conduit.Parallel.Internal.Copier
                         , Data.Conduit.Parallel.Internal.Duct
                         , Data.Conduit.Parallel.Internal.Flip
-                        , Data.Conduit.Parallel.Internal.Fuse
                         , Data.Conduit.Parallel.Internal.LiftC
                         , Data.Conduit.Parallel.Internal.Parallel
                         , Data.Conduit.Parallel.Internal.Run
@@ -51,7 +50,6 @@ library
   build-depends:       base >= 4.7 && < 5
                         , conduit
                         , containers
-                        , deepseq
                         , mtl
                         , profunctors
                         , stm
@@ -59,10 +57,9 @@ library
                         , transformers
                         , unliftio
                         , unliftio-core
+                        -- , selective
                         -- , lifted-base
                         -- , monad-control
-                        -- , selective
-                        -- , transformers
                         -- , witherable
   default-language:    Haskell2010
   if flag(devel)

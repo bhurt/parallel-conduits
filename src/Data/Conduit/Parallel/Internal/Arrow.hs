@@ -355,7 +355,6 @@ module Data.Conduit.Parallel.Internal.Arrow (
                             in
                             runM recur
 
-
     -- | Convert a ParArrow to a ParConduit
     --
     -- As this is just unwrapping one newtype and wrapping a second
