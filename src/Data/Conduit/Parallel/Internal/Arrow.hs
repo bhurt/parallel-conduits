@@ -21,30 +21,178 @@
 --
 module Data.Conduit.Parallel.Internal.Arrow (
     ParArrow(..),
+    wrapA,
+    wrapA2,
     toParConduit,
     liftK
 ) where
 
     import           Control.Arrow
     import qualified Control.Category                      as Cat
-    import           Control.Monad.Cont                    (ContT)
+    import           Control.Monad.Cont                    (ContT, lift)
+    import           Control.Monad.Trans.Maybe
+    import           Data.Bitraversable
     import           Data.Conduit.Parallel.Internal.AUtils
     import           Data.Conduit.Parallel.Internal.Copier (copier)
-    import qualified Data.Conduit.Parallel.Internal.Duct   as Duct
+    import           Data.Conduit.Parallel.Internal.Duct
+    import           Data.Conduit.Parallel.Internal.Flip
     import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
     import qualified Data.Functor.Contravariant            as Contra
     import qualified Data.Profunctor                       as Pro
-    import           Data.These
+    import           Data.Void
+    import           System.IO.Unsafe                      (unsafePerformIO)
     import           UnliftIO
+
 
     newtype ParArrow m i o = ParArrow {
                                     getParArrow ::
                                         forall x .
-                                        Duct.ReadDuct i
-                                        -> Duct.WriteDuct o
+                                        ReadDuct i
+                                        -> WriteDuct o
                                         -> ContT x m (m ())
                                 }
+
+
+    wrapA :: forall m i o f .
+                (MonadUnliftIO m
+                , Traversable f)
+                => ParArrow m i o
+                -> ParArrow m (f i) (f o)
+    wrapA pa = ParArrow go
+        where
+            go :: forall x .
+                    ReadDuct (f i)
+                    -> WriteDuct (f o)
+                    -> ContT x m (m ())
+            go rdfi wdfo = do
+                (rdi, wdi) <- liftIO newDuct
+                (rdo, wdo) <- liftIO newDuct
+                que :: Queue (f ()) <- makeQueue
+                m1 <- spawnIO $ splitter que rdfi wdi
+                m2 <- spawnIO $ fuser que rdo wdfo
+                m3 <- getParArrow pa rdi wdo
+                pure $ m1 >> m2 >> m3
+
+            splitter :: Queue (f ()) -> ReadDuct (f i) -> WriteDuct i -> IO ()
+            splitter que rdfi wdi = do
+                withCloseQueue que $
+                    withReadDuct rdfi Nothing $ \rfi ->
+                        withWriteDuct wdi Nothing $ \wi ->
+                            let recur :: MaybeT IO Void
+                                recur = do
+                                    fi :: f i <- readM rfi
+                                    fu :: f () <- traverse (writeM wi) fi
+                                    queueAdd que fu
+                                    recur
+                            in
+                            runM recur
+
+            fuser :: Queue (f ()) -> ReadDuct o -> WriteDuct (f o) -> IO ()
+            fuser que rdo wdfo = do
+                withReadDuct rdo Nothing $ \ro ->
+                    withWriteDuct wdfo Nothing $ \wfo ->
+                        let recur :: MaybeT IO Void
+                            recur = do
+                                fu :: f () <- queueGet que
+                                fo :: f o <- traverse (\() -> readM ro) fu
+                                writeM wfo fo
+                                recur
+                        in
+                        runM recur
+
+    wrapA2 :: forall m i1 i2 o1 o2 f .
+                (MonadUnliftIO m
+                , Bitraversable f)
+                => ParArrow m i1 o1
+                -> ParArrow m i2 o2
+                -> ParArrow m (f i1 i2) (f o1 o2)
+    wrapA2 pa1 pa2 = ParArrow go
+        where
+            go :: forall x .
+                    ReadDuct (f i1 i2)
+                    -> WriteDuct (f o1 o2)
+                    -> ContT x m (m ())
+            go rdfi wdfo = do
+                (rdi1, wdi1) <- liftIO newDuct
+                (rdi2, wdi2) <- liftIO newDuct
+                (rdo1, wdo1) <- liftIO newDuct
+                (rdo2, wdo2) <- liftIO newDuct
+                que :: Queue (f () ()) <- makeQueue
+                m1 <- spawnIO $ splitter que rdfi wdi1 wdi2
+                m2 <- spawnIO $ fuser que rdo1 rdo2 wdfo
+                m3 <- getParArrow pa1 rdi1 wdo1
+                m4 <- getParArrow pa2 rdi2 wdo2
+                pure $ m1 >> m2 >> m3 >> m4
+
+            splitter :: Queue (f () ())
+                        -> ReadDuct (f i1 i2)
+                        -> WriteDuct i1
+                        -> WriteDuct i2
+                        -> IO ()
+            splitter que rdfi wdi1 wdi2 = do
+                withCloseQueue que $
+                    withReadDuct rdfi Nothing $ \rfi ->
+                        withWriteDuct wdi1 Nothing $ \wi1 ->
+                            withWriteDuct wdi2 Nothing $ \wi2 ->
+                                let recur :: MaybeT IO Void
+                                    recur = do
+                                        fi :: f i1 i2 <- readM rfi
+                                        fu :: f () () <- bitraverse
+                                                            (writeM wi1)
+                                                            (writeM wi2)
+                                                            fi
+                                        queueAdd que fu
+                                        recur
+                                in
+                                runM recur
+
+            fuser :: Queue (f () ())
+                        -> ReadDuct o1
+                        -> ReadDuct o2
+                        -> WriteDuct (f o1 o2)
+                        -> IO ()
+            fuser que rdo1 rdo2 wdfo = do
+                withReadDuct rdo1 Nothing $ \ro1 ->
+                    withReadDuct rdo2 Nothing $ \ro2 ->
+                        withWriteDuct wdfo Nothing $ \wfo ->
+                            let recur :: MaybeT IO Void
+                                recur = do
+                                    fu :: f () () <- queueGet que
+                                    fo :: f o1 o2 <- bitraverse
+                                                        (\() -> readM ro1)
+                                                        (\() -> readM ro2)
+                                                        fu
+                                    writeM wfo fo
+                                    recur
+                            in
+                            runM recur
+
+    -- | Lift a Kleisli arrow into a ParArrow.
+    --
+    -- This creates a ParArrow that spawns a single thread, which calls
+    -- the Kleisli function on every value.  Note that since `Kleisli`
+    -- is itself an arrow, it can represent an arbitrary complicated
+    -- pipeline itself.  But this entire pipeline will be executed in
+    -- a single thread.
+    liftK :: forall m i o . MonadUnliftIO m => Kleisli m i o -> ParArrow m i o
+    liftK (Kleisli f) = ParArrow go
+        where
+            go :: forall x .  ReadDuct i -> WriteDuct o -> ContT x m (m ())
+            go rdi wdo = spawn $ worker rdi wdo
+
+            worker :: ReadDuct i -> WriteDuct o -> m ()
+            worker rdi wdo = do
+                withReadDuct rdi Nothing $ \ri ->
+                    withWriteDuct wdo Nothing $ \wo ->
+                        let recur :: MaybeT m Void
+                            recur = do
+                                i <- readM ri
+                                o <- lift $ f i
+                                writeM wo o
+                                recur
+                        in
+                        runM recur
 
 
     instance Functor (ParArrow m i) where
@@ -73,137 +221,140 @@ module Data.Conduit.Parallel.Internal.Arrow (
         id :: forall a . ParArrow m a a
         id = ParArrow go
                 where
-                    go :: Duct.ReadDuct a
-                            -> Duct.WriteDuct a
+                    go :: ReadDuct a
+                            -> WriteDuct a
                             -> ContT t m (m ())
                     go rd wr = spawnIO $ copier rd wr
 
         a1 . a2 = ParArrow $
                     \rd wd -> do
-                        (rx, wx) <- liftIO $ Duct.newDuct
+                        (rx, wx) <- liftIO $ newDuct
                         r1 <- getParArrow a2 rd wx
                         r2 <- getParArrow a1 rx wd
                         pure $ r1 >> r2
 
     instance MonadUnliftIO m => Arrow (ParArrow m) where
-        arr f = ParArrow $ runK (pure . f)
+        arr f = liftK (Kleisli (pure . f))
 
         first :: forall b c d .
                     ParArrow m b c
                     -> ParArrow m (b, d) (c, d)
-        first pa = ParArrow $ aBypass f g (getParArrow pa)
-            where
-
-                f :: (b, d) -> These d b
-                f (b, d) = These d b
-
-                g :: These d c -> (c, d)
-                g (These d c) = (c, d)
-                g _           = error "Impossible state reached!"
+        first pa = Pro.dimap Flip unFlip $ wrapA pa
 
         second :: forall b c d .
                     ParArrow m b c
                     -> ParArrow m (d, b) (d, c)
-        second pa = ParArrow $ aBypass f g (getParArrow pa)
-            where
-                f :: (d, b) -> These d b
-                f (d, b) = These d b
-
-                g :: These d c -> (d, c)
-                g (These d c) = (d, c)
-                g _           = error "Impossible state reached!"
+        second pa = wrapA pa
 
         (***) :: forall b c b' c' .
                     ParArrow m b c
                     -> ParArrow m b' c'
                     -> ParArrow m (b, b') (c, c')
-        p1 *** p2 = ParArrow $ aDupe f g (getParArrow p1) (getParArrow p2)
-            where 
-                f :: (b, b') -> These b b'
-                f (b, b') = These b b'
-                g :: These c c' -> (c, c')
-                g (These c c') = (c, c')
-                g _ = error "Impossible state reached!"
+        p1 *** p2 = wrapA2 p1 p2
 
         (&&&) :: forall b c c' .
                     ParArrow m b c
                     -> ParArrow m b c'
                     -> ParArrow m b (c, c')
-        p1 &&& p2 = ParArrow $ aDupe f g (getParArrow p1) (getParArrow p2)
-            where
-                f :: b -> These b b
-                f b = These b b
-                g :: These c c' -> (c, c')
-                g (These c c') = (c, c')
-                g _ = error "Impossible state reached!"
+        p1 &&& p2 = Pro.lmap (\b -> (b, b)) $ wrapA2 p1 p2
 
     instance MonadUnliftIO m => ArrowChoice (ParArrow m) where
 
         left :: forall b c d .
                     ParArrow m b c
                     -> ParArrow m (Either b d) (Either c d)
-        left pa = ParArrow $ aBypass f g (getParArrow pa)
-            where
-                f :: Either b d -> These d b
-                f (Left b)  = That b
-                f (Right d) = This d
-
-                g :: These d c -> Either c d
-                g (This d) = Right d
-                g (That c) = Left c
-                g _        = error "Impossible state reached!"
+        left pa = Pro.dimap Flip unFlip $ wrapA pa
 
         right :: forall b c d .
                     ParArrow m b c
                     -> ParArrow m (Either d b) (Either d c)
-        right pa = ParArrow $ aBypass f g (getParArrow pa)
-            where
-
-                f :: Either d b -> These d b
-                f (Left d)  = This d
-                f (Right b) = That b
-
-                g :: These d c -> Either d c
-                g (This d) = Left d
-                g (That c) = Right c
-                g _        = error "Impossible state reached!"
+        right pa = wrapA pa
 
         (+++) :: forall b c b' c' .
                     ParArrow m b c
                     -> ParArrow m b' c'
                     -> ParArrow m (Either b b') (Either c c')
-        pa1 +++ pa2 = ParArrow $ aDupe f g (getParArrow pa1) (getParArrow pa2)
-            where
-                f :: Either b b' -> These b b'
-                f (Left b)   = This b
-                f (Right b') = That b'
-
-                g :: These c c' -> Either c c'
-                g (This c) = Left c
-                g (That c') = Right c'
-                g _ = error "Impossible state reached!"
+        pa1 +++ pa2 = wrapA2 pa1 pa2
 
 
         (|||) :: forall b c d .
                     ParArrow m b d
                     -> ParArrow m c d
                     -> ParArrow m (Either b c) d
-        pa1 ||| pa2 = ParArrow $ aDupe f g (getParArrow pa1) (getParArrow pa2)
+        pa1 ||| pa2 = fmap go $ wrapA2 pa1 pa2
             where
-                f :: Either b c -> These b c
-                f (Left b)  = This b
-                f (Right c) = That c
+                go :: Either d d -> d
+                go (Left d)  = d
+                go (Right d) = d
 
-                g :: These d d -> d
-                g (This d) = d
-                g (That d) = d
-                g _ = error "Impossible state reached!"
+    instance MonadUnliftIO m => Applicative (ParArrow m a) where
+        pure a = liftK . Kleisli $ \_ -> pure a
+        pa1 <*> pa2 = Pro.dimap (\i -> (i, i)) (\(f, o) -> f o) $ wrapA2 pa1 pa2
 
     instance MonadUnliftIO m => ArrowLoop (ParArrow m) where
         loop :: forall b c d .
                     ParArrow m (b, d) (c, d)
                     -> ParArrow m b c
-        loop inner = ParArrow $ aLoop (getParArrow inner)
+        loop inner = ParArrow $ go
+            where
+                go :: forall x .
+                        ReadDuct b
+                        -> WriteDuct c
+                        -> ContT x m (m ())
+                go rdb wdc = do
+                    (rdbd, wdbd) <- liftIO newDuct
+                    (rdcd, wdcd) <- liftIO newDuct
+                    que :: Queue (IORef (Maybe d)) <- makeQueue
+                    m1 <- spawnIO $ splitter que rdb wdbd
+                    m2 <- spawnIO $ fuser que rdcd wdc
+                    m3 <- getParArrow inner rdbd wdcd
+                    pure $ m1 >> m2 >> m3
+
+                splitter :: Queue (IORef (Maybe d))
+                            -> ReadDuct b
+                            -> WriteDuct (b, d)
+                            -> IO ()
+                splitter que rdb wdbd = do
+                    withCloseQueue que $
+                        withReadDuct rdb Nothing $ \rb ->
+                            withWriteDuct wdbd Nothing $ \wbd ->
+                                let recur :: MaybeT IO Void
+                                    recur = do
+                                        b <- readM rb
+                                        ref :: IORef (Maybe d)
+                                            <- liftIO $ newIORef Nothing
+                                        queueAdd que ref
+                                        writeM wbd (b, getRef ref)
+                                        recur
+                                in
+                                runM recur
+
+                getRef :: IORef (Maybe d) -> d
+                getRef ref =
+                    -- Hold my beer and watch this.
+                    unsafePerformIO $ do
+                        r <- readIORef ref
+                        case r of
+                            Nothing -> error "ParArrow loop: value forces too soon"
+                            Just d  -> pure d
+
+                fuser :: Queue (IORef (Maybe d))
+                        -> ReadDuct (c,d)
+                        -> WriteDuct c
+                        -> IO ()
+                fuser que rdcd wdc = do
+                    withReadDuct rdcd Nothing $ \rcd ->
+                        withWriteDuct wdc Nothing $ \wc ->
+                            let recur :: MaybeT IO Void
+                                recur = do
+                                    ref <- queueGet que
+                                    (c, d) <- readM rcd
+                                    liftIO $ writeIORef ref (Just d)
+                                    writeM wc c
+                                    recur
+                            in
+                            runM recur
+
 
     -- | Convert a ParArrow to a ParConduit
     --
@@ -216,17 +367,4 @@ module Data.Conduit.Parallel.Internal.Arrow (
         --      toParConduit = ParConduit . getParArrow
         -- This does not work, for reasons I am unclear about but have
         -- to do with weirdness around higher ranked types.
-
-    -- | Lift a Kleisli arrow into a ParArrow.
-    --
-    -- This creates a ParArrow that spawns a single thread, which calls
-    -- the Kleisli function on every value.  Note that since `Kleisli`
-    -- is itself an arrow, it can represent an arbitrary complicated
-    -- pipeline itself.  But this entire pipeline will be executed in
-    -- a single thread.
-    liftK :: forall m i o .
-                MonadUnliftIO m
-                => Kleisli m i o
-                -> ParArrow m i o
-    liftK kl = ParArrow $ runK (runKleisli kl)
 

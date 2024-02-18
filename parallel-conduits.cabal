@@ -40,6 +40,7 @@ library
                         , Data.Conduit.Parallel.Internal.Circuit
                         , Data.Conduit.Parallel.Internal.Copier
                         , Data.Conduit.Parallel.Internal.Duct
+                        , Data.Conduit.Parallel.Internal.Flip
                         , Data.Conduit.Parallel.Internal.Fuse
                         , Data.Conduit.Parallel.Internal.LiftC
                         , Data.Conduit.Parallel.Internal.Parallel
