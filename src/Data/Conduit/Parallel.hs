@@ -37,13 +37,16 @@ module Data.Conduit.Parallel (
     toParConduit,
     liftK,
     wrapA,
-    routeA
+    routeA,
 
+    -- * Misc
+    Flip(..)
 ) where
 
     import           Data.Conduit.Parallel.Internal.Arrow
     import           Data.Conduit.Parallel.Internal.Cache
     import           Data.Conduit.Parallel.Internal.Circuit
+    import           Data.Conduit.Parallel.Internal.Flip
     import           Data.Conduit.Parallel.Internal.LiftC
     import           Data.Conduit.Parallel.Internal.Parallel
     import           Data.Conduit.Parallel.Internal.Type
