@@ -40,6 +40,7 @@ module Data.Conduit.Parallel.Internal.Utils (
 
     readM :: forall a m . MonadIO m => IO (Maybe a) -> MaybeT m a
     readM = MaybeT . liftIO
+    {-# SPECIALIZE readM :: IO (Maybe a ) -> MaybeT IO a #-}
 
     writeM :: forall a m . MonadIO m => (a -> IO Duct.Open) -> a -> MaybeT m ()
     writeM wr a =
@@ -48,6 +49,7 @@ module Data.Conduit.Parallel.Internal.Utils (
             case open of
                 Duct.Open   -> pure $ Just ()
                 Duct.Closed -> pure Nothing
+    {-# SPECIALIZE writeM :: (a -> IO Duct.Open) -> a -> MaybeT IO () #-}
 
     runM :: forall m . Monad m => MaybeT m Void -> m ()
     runM act = do
@@ -55,6 +57,7 @@ module Data.Conduit.Parallel.Internal.Utils (
         case r of
             Nothing -> pure ()
             Just v  -> absurd v
+    {-# SPECIALIZE runM :: MaybeT IO Void -> IO () #-}
 
 
     type Queue a = TVar (Seq (Maybe a))
