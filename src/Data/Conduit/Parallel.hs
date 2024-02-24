@@ -12,8 +12,9 @@ module Data.Conduit.Parallel (
 
     ParConduit,
 
-    -- ** Lifting conduits
+    -- ** Creating conduits
     liftC,
+    forceC,
 
     -- ** Fusing
     fuse,
@@ -39,6 +40,7 @@ module Data.Conduit.Parallel (
     wrapA,
     routeA,
     parallelA,
+    forceA,
 
     -- * Misc
     Flip(..)

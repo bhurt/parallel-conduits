@@ -18,9 +18,12 @@
 -- notice.  Use at your own risk.
 --
 module Data.Conduit.Parallel.Internal.LiftC (
-    liftC
+    liftC,
+    forceC
 ) where
 
+    import           Control.DeepSeq
+    import           Control.Exception                    (evaluate)
     import           Control.Monad.Cont                   (ContT)
     import           Control.Monad.IO.Class               (liftIO)
     import           Control.Monad.IO.Unlift              (MonadUnliftIO)
@@ -76,4 +79,18 @@ module Data.Conduit.Parallel.Internal.LiftC (
                             Duct.Open   -> writeConduit wd
                             Duct.Closed -> pure ()
                     Nothing -> pure ()
+
+
+    -- | Force the outputs of a ParConduit into normal form.
+    forceC :: forall m r i o .
+                NFData o
+                => ParConduit m r i o
+                -> ParConduit m r i o
+    forceC pc = ParConduit go
+        where
+            go :: forall x .  Duct.ReadDuct i -> Duct.WriteDuct o -> ContT x m (m r)
+            go rd wd =
+                let wd' = Duct.contramapIO (evaluate . force) wd in
+                getParConduit pc rd wd'
+
 

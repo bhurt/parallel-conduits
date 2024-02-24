@@ -24,11 +24,14 @@ module Data.Conduit.Parallel.Internal.Arrow (
     wrapA,
     routeA,
     toParConduit,
-    liftK
+    liftK,
+    forceA
 ) where
 
     import           Control.Arrow
     import qualified Control.Category                      as Cat
+    import           Control.DeepSeq
+    import qualified Control.Exception                     as Ex
     import           Control.Monad.Cont                    (ContT, lift)
     import           Control.Monad.Trans.Maybe
     import           Data.Bitraversable
@@ -366,4 +369,17 @@ module Data.Conduit.Parallel.Internal.Arrow (
         --      toParConduit = ParConduit . getParArrow
         -- This does not work, for reasons I am unclear about but have
         -- to do with weirdness around higher ranked types.
+
+    -- | Force the outputs of a ParArrow into normal form.
+    forceA :: forall m i o .
+                NFData o
+                => ParArrow m i o
+                -> ParArrow m i o
+    forceA pa = ParArrow go
+        where
+            go :: forall x .  ReadDuct i -> WriteDuct o -> ContT x m (m ())
+            go rd wd =
+                let wd' = contramapIO (Ex.evaluate . force) wd in
+                getParArrow pa rd wd'
+
 
