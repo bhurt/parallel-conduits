@@ -24,10 +24,12 @@ module Data.Conduit.Parallel.Internal.Copier (
     traverser
 ) where
 
-    import           Data.Conduit.Parallel.Internal.Duct
-    import           Data.Conduit.Parallel.Internal.Utils
+    import           Control.Monad.Cont
     import           Control.Monad.Trans.Maybe
     import           Data.Bitraversable
+    import           Data.Conduit.Parallel.Internal.Duct
+    import           Data.Conduit.Parallel.Internal.Utils
+    import           Data.Foldable                        (traverse_)
     import           Data.Void
 
     copier :: forall a .
@@ -66,13 +68,29 @@ module Data.Conduit.Parallel.Internal.Copier (
                     in
                     runM recur
 
-    duplicator :: forall a .
-                    ReadDuct a
-                    -> WriteDuct a
-                    -> WriteDuct a
+    duplicator :: forall a f .
+                    Traversable f
+                    => ReadDuct a
+                    -> f (WriteDuct a)
                     -> IO ()
-    duplicator src = direct ((\a -> (a, a)) <$> src)
+    duplicator rda fwda = runContT go fini
+        where
+            go :: ContT () IO (IO (Maybe a), f (a -> IO Open))
+            go = do
+                ra <- ContT $ withReadDuct rda Nothing
+                fwa <- traverse (\wda -> ContT $ withWriteDuct wda Nothing) fwda
+                pure (ra, fwa)
 
+            fini :: (IO (Maybe a), f (a -> IO Open)) -> IO ()
+            fini (ra, fwa) =
+                let recur :: MaybeT IO Void
+                    recur = do
+                        a <- readM ra
+                        traverse_ (flip writeM a) fwa
+                        recur
+                in
+                runM recur
+            
     traverser :: forall f a .
                     Traversable f
                     => ReadDuct (f a)
@@ -84,7 +102,7 @@ module Data.Conduit.Parallel.Internal.Copier (
                 let recur :: MaybeT IO Void
                     recur = do
                         f <- readM rf
-                        _ <- traverse (writeM wa) f
+                        traverse_ (writeM wa) f
                         recur
                 in
                 runM recur

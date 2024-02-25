@@ -27,6 +27,8 @@ module Data.Conduit.Parallel (
     parallel,
     tee,
     merge,
+    teeMany,
+    mergeMany,
     route,
     fixP,
     traverseC,
