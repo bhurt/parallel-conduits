@@ -20,7 +20,8 @@
 module Data.Conduit.Parallel.Internal.Copier (
     copier,
     duplicator,
-    direct
+    direct,
+    traverser
 ) where
 
     import           Data.Conduit.Parallel.Internal.Duct
@@ -71,3 +72,19 @@ module Data.Conduit.Parallel.Internal.Copier (
                     -> WriteDuct a
                     -> IO ()
     duplicator src = direct ((\a -> (a, a)) <$> src)
+
+    traverser :: forall f a .
+                    Traversable f
+                    => ReadDuct (f a)
+                    -> WriteDuct a
+                    -> IO ()
+    traverser rdf wda = 
+        withReadDuct rdf Nothing $ \rf ->
+            withWriteDuct wda Nothing $ \wa ->
+                let recur :: MaybeT IO Void
+                    recur = do
+                        f <- readM rf
+                        _ <- traverse (writeM wa) f
+                        recur
+                in
+                runM recur

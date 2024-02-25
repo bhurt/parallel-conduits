@@ -29,6 +29,7 @@ module Data.Conduit.Parallel (
     merge,
     route,
     fixP,
+    traverseC,
 
     -- ** Caching
     cache,

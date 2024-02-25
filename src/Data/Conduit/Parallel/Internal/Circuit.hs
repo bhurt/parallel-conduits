@@ -19,7 +19,8 @@
 --
 module Data.Conduit.Parallel.Internal.Circuit (
     route,
-    fixP
+    fixP,
+    traverseC
 ) where
 
     import           Control.Monad.Cont
@@ -83,4 +84,16 @@ module Data.Conduit.Parallel.Internal.Circuit (
                 m2 <- spawnIO $ copier rdi wdi'
                 mr <- getParConduit inner rdi' wdf
                 pure $ m1 >> m2 >> mr
+
+    traverseC :: forall m f a .
+                    (MonadUnliftIO m
+                    , Traversable f)
+                    => ParConduit m () (f a) a
+    traverseC = ParConduit go
+        where
+            go :: forall x .
+                    ReadDuct (f a)
+                    -> WriteDuct a
+                    -> ContT x m (m ())
+            go rdf wda = spawnIO $ traverser rdf wda
 
