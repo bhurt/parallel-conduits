@@ -48,6 +48,7 @@ module Data.Conduit.Parallel.Internal.Duct(
     Open(..),
     ReadDuct,
     WriteDuct,
+    Duct,
     newDuct,
     newFullDuct,
     newClosedDuct,
@@ -315,6 +316,8 @@ module Data.Conduit.Parallel.Internal.Duct(
 
     instance Contravariant WriteDuct where
         contramap f wd = wd { writeDuct = \mr -> writeDuct wd mr . f }
+
+    type Duct a = (ReadDuct a, WriteDuct a)
 
     -- | Maybe-analog for whether an operation has completed or would block.
     data WouldBlock a =
@@ -786,7 +789,7 @@ module Data.Conduit.Parallel.Internal.Duct(
             let !c2 = c + cnt
             writeTVar cvar c2
 
-    makeDuct :: forall a . Contents a -> IO (ReadDuct a, WriteDuct a)
+    makeDuct :: forall a . Contents a -> IO (Duct a)
     makeDuct cnts = do
         let makeStatus :: IsClosed (Status a)
             makeStatus = IsOpen $
@@ -813,13 +816,13 @@ module Data.Conduit.Parallel.Internal.Duct(
         pure (rd, wd)
 
 
-    newDuct :: forall a .  IO (ReadDuct a, WriteDuct a)
+    newDuct :: forall a .  IO (Duct a)
     newDuct = makeDuct Empty
 
-    newFullDuct :: forall a .  a -> IO (ReadDuct a, WriteDuct a)
+    newFullDuct :: forall a .  a -> IO (Duct a)
     newFullDuct a = makeDuct $ Full a
 
-    newClosedDuct :: forall a . (ReadDuct a, WriteDuct a)
+    newClosedDuct :: forall a . Duct a
     newClosedDuct = (rd, wd)
         where
             rd :: ReadDuct a

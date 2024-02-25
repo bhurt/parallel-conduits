@@ -34,6 +34,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
     import qualified Control.Exception                     as Ex
     import           Control.Monad.Cont                    (ContT, lift)
     import           Control.Monad.Trans.Maybe
+    import           Control.Selective
     import           Data.Bitraversable
     import           Data.Conduit.Parallel.Internal.Copier (copier)
     import           Data.Conduit.Parallel.Internal.Duct
@@ -293,6 +294,91 @@ module Data.Conduit.Parallel.Internal.Arrow (
     instance MonadUnliftIO m => Applicative (ParArrow m a) where
         pure a = liftK . Kleisli $ \_ -> pure a
         pa1 <*> pa2 = Pro.dimap (\i -> (i, i)) (\(f, o) -> f o) $ routeA pa1 pa2
+
+    instance MonadUnliftIO m => Selective (ParArrow m i) where
+        select :: forall a b .
+                    ParArrow m i (Either a b)
+                    -> ParArrow m i (a -> b)
+                    -> ParArrow m i b
+        select one two = ParArrow go
+            where
+                go :: forall x .
+                        ReadDuct i
+                        -> WriteDuct b
+                        -> ContT x m (m ())
+                go rdi wdb = do
+                    (rdi1, wdi1) :: Duct i <- liftIO newDuct
+                    (rdi2, wdi2) :: Duct i <- liftIO newDuct
+                    (rde, wde) :: Duct (Either a b) <- liftIO newDuct
+                    (rdf, wdf) :: Duct (a -> b) <- liftIO newDuct
+                    quei :: Queue i <- makeQueue
+                    quee :: Queue (Either a b) <- makeQueue
+
+                    s1 :: m () <- spawnIO $ shim1 rdi wdi1 quei
+                    m1 :: m () <- getParArrow one rdi1 wde
+                    s2 :: m () <- spawnIO $ shim2 quei rde quee wdi2
+                    m2 :: m () <- getParArrow two rdi2 wdf
+                    s3 :: m () <- spawnIO $ shim3 rdf quee wdb
+                    pure $ s1 >> s2 >> s3 >> m1 >> m2
+
+                shim1 :: ReadDuct i
+                            -> WriteDuct i
+                            -> Queue i
+                            -> IO ()
+                shim1 rdi wdi quei =
+                    withCloseQueue quei $
+                        withReadDuct rdi Nothing $ \ri ->
+                            withWriteDuct wdi Nothing $ \wi ->
+                                let recur :: MaybeT IO Void
+                                    recur = do
+                                        i :: i <- readM ri
+                                        writeM wi i
+                                        queueAdd quei i
+                                        recur
+                                in
+                                runM recur
+
+                shim2 :: Queue i
+                            -> ReadDuct (Either a b)
+                            -> Queue (Either a b)
+                            -> WriteDuct i
+                            -> IO ()
+                shim2 quei rde quee wdi =
+                    withCloseQueue quee $
+                        withReadDuct rde Nothing $ \re ->
+                            withWriteDuct wdi Nothing $ \wi ->
+                                let recur :: MaybeT IO Void
+                                    recur = do
+                                        e :: Either a b <- readM re
+                                        i :: i <- queueGet quei
+                                        case e of
+                                            Left _  -> writeM wi i
+                                            Right _ -> pure ()
+                                        queueAdd quee e
+                                        recur
+                                in
+                                runM recur
+
+                shim3 :: ReadDuct (a -> b)
+                            -> Queue (Either a b)
+                            -> WriteDuct b
+                            -> IO ()
+                shim3 rdf quee wdb =
+                    withReadDuct rdf Nothing $ \rf ->
+                        withWriteDuct wdb Nothing $ \wb ->
+                            let recur :: MaybeT IO Void
+                                recur = do
+                                    e :: Either a b <- queueGet quee
+                                    b :: b <-
+                                        case e of
+                                            Left a -> do
+                                                f <- readM rf
+                                                pure $ f a
+                                            Right b -> pure b
+                                    writeM wb b
+                                    recur
+                            in
+                            runM recur
 
     instance MonadUnliftIO m => ArrowLoop (ParArrow m) where
         loop :: forall b c d .
