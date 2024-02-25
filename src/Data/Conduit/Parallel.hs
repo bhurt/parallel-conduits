@@ -42,6 +42,7 @@ module Data.Conduit.Parallel (
     routeA,
     parallelA,
     forceA,
+    cacheA,
 
     -- * Misc
     Flip(..)
