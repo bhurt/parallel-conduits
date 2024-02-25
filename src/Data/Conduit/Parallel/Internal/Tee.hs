@@ -47,8 +47,7 @@ module Data.Conduit.Parallel.Internal.Tee (
                     -> WriteDuct i
                     -> ContT x m (m r)
             go rd wd = do
-                (rd2, wd2) :: (ReadDuct i, WriteDuct i)
-                    <- liftIO $ newDuct
+                (rd2, wd2) :: Duct i <- liftIO $ newDuct
                 let wdc :: WriteDuct Void
                     (_, wdc) = newClosedDuct
                 r1 :: m r <- getParConduit sink rd2 wdc

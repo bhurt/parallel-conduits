@@ -70,8 +70,8 @@ module Data.Conduit.Parallel.Internal.Arrow (
                     -> WriteDuct (f o)
                     -> ContT x m (m ())
             go rdfi wdfo = do
-                (rdi, wdi) <- liftIO newDuct
-                (rdo, wdo) <- liftIO newDuct
+                (rdi, wdi) :: Duct i <- liftIO newDuct
+                (rdo, wdo) :: Duct o <- liftIO newDuct
                 que :: Queue (f ()) <- makeQueue
                 m1 <- spawnIO $ splitter que rdfi wdi
                 m2 <- spawnIO $ fuser que rdo wdfo
@@ -118,10 +118,10 @@ module Data.Conduit.Parallel.Internal.Arrow (
                     -> WriteDuct (f o1 o2)
                     -> ContT x m (m ())
             go rdfi wdfo = do
-                (rdi1, wdi1) <- liftIO newDuct
-                (rdi2, wdi2) <- liftIO newDuct
-                (rdo1, wdo1) <- liftIO newDuct
-                (rdo2, wdo2) <- liftIO newDuct
+                (rdi1, wdi1) :: Duct i1 <- liftIO newDuct
+                (rdi2, wdi2) :: Duct i2 <- liftIO newDuct
+                (rdo1, wdo1) :: Duct o1 <- liftIO newDuct
+                (rdo2, wdo2) :: Duct o2 <- liftIO newDuct
                 que :: Queue (f () ()) <- makeQueue
                 m1 <- spawnIO $ splitter que rdfi wdi1 wdi2
                 m2 <- spawnIO $ fuser que rdo1 rdo2 wdfo
@@ -232,7 +232,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
 
         a1 . a2 = ParArrow $
                     \rd wd -> do
-                        (rx, wx) <- liftIO $ newDuct
+                        (rx, wx) :: Duct x <- liftIO $ newDuct
                         r1 <- getParArrow a2 rd wx
                         r2 <- getParArrow a1 rx wd
                         pure $ r1 >> r2
@@ -391,8 +391,8 @@ module Data.Conduit.Parallel.Internal.Arrow (
                         -> WriteDuct c
                         -> ContT x m (m ())
                 go rdb wdc = do
-                    (rdbd, wdbd) <- liftIO newDuct
-                    (rdcd, wdcd) <- liftIO newDuct
+                    (rdbd, wdbd) :: Duct (b, d) <- liftIO newDuct
+                    (rdcd, wdcd) :: Duct (c, d) <- liftIO newDuct
                     que :: Queue (IORef (Maybe d)) <- makeQueue
                     m1 <- spawnIO $ splitter que rdb wdbd
                     m2 <- spawnIO $ fuser que rdcd wdc

@@ -87,7 +87,7 @@ module Data.Conduit.Parallel.Internal.Type (
                     -> Duct.WriteDuct o
                     -> ContT t m (m r)
             go rd wd = do
-                (xrd, xwd) <- liftIO $ Duct.newDuct
+                (xrd, xwd) :: Duct.Duct x <- liftIO $ Duct.newDuct
                 r1 <- getParConduit pc1 rd xwd
                 r2 <- getParConduit pc2 xrd wd
                 pure $ fixr <$> r1 <*> r2

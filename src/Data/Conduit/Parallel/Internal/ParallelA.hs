@@ -61,8 +61,8 @@ module Data.Conduit.Parallel.Internal.ParallelA (
 
             doSpawn :: forall x . Int -> ContT x m (Foo m i o)
             doSpawn _ = do
-                (rdi, wdi) <- liftIO $ newDuct
-                (rdo, wdo) <- liftIO $ newDuct
+                (rdi, wdi) :: Duct i <- liftIO $ newDuct
+                (rdo, wdo) :: Duct o <- liftIO $ newDuct
                 w <- getParArrow pa rdi wdo
                 pure $ Foo {
                         input = wdi,

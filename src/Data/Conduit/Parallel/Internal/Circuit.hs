@@ -49,8 +49,8 @@ module Data.Conduit.Parallel.Internal.Circuit (
                     -> WriteDuct o
                     -> ContT x m (m r)
             go rdf wdo = do
-                (rdi1, wdi1) <- liftIO $ newDuct
-                (rdi2, wdi2) <- liftIO $ newDuct
+                (rdi1, wdi1) :: Duct i1 <- liftIO $ newDuct
+                (rdi2, wdi2) :: Duct i2 <- liftIO $ newDuct
                 liftIO $ addWriteOpens wdo 1
                 mr1 <- getParConduit pc1 rdi1 wdo
                 mr2 <- getParConduit pc2 rdi2 wdo
@@ -77,8 +77,8 @@ module Data.Conduit.Parallel.Internal.Circuit (
                     -> WriteDuct o
                     -> ContT x m (m r)
             go rdi wro = do
-                (rdf, wdf) <- liftIO $ newDuct
-                (rdi', wdi') <- liftIO $ newDuct
+                (rdf, wdf) :: Duct (f i o) <- liftIO $ newDuct
+                (rdi', wdi') :: Duct i <- liftIO $ newDuct
                 liftIO $ addWriteOpens wdi' 1
                 m1 <- spawnIO $ direct rdf wdi' wro
                 m2 <- spawnIO $ copier rdi wdi'
