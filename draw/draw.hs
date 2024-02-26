@@ -3,6 +3,7 @@
 
 {-# LANGUAGE OverloadedStrings #-}
 
+import           Arrow
 import           Circuit
 import           Fuse
 import           Misc
@@ -72,4 +73,6 @@ main = do
     writeSVG (odir </> "merge.svg") merge
     writeSVG (odir </> "route.svg") routeSvg
     writeSVG (odir </> "fixP.svg") fixP
+    writeSVG (odir </> "wrapA.svg") wrapA
+    writeSVG (odir </> "routeA.svg") routeA
     putStrLn "Done."

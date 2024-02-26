@@ -58,6 +58,10 @@ module Data.Conduit.Parallel.Internal.Arrow (
                                 }
 
 
+    -- | Wrap a ParArrow to take and return a traversable data structure.
+    --
+    -- ![image](docs/wrapA.svg)
+    --
     wrapA :: forall m i o f .
                 (MonadUnliftIO m
                 , Traversable f)
@@ -105,6 +109,10 @@ module Data.Conduit.Parallel.Internal.Arrow (
                         in
                         runM recur
 
+    -- | Route a bitraversable structure to either of two inner ParArrows.
+    --
+    -- ![image](docs/routeA.svg)
+    --
     routeA :: forall m i1 i2 o1 o2 f .
                 (MonadUnliftIO m
                 , Bitraversable f)

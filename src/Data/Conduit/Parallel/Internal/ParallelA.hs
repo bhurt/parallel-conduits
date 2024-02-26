@@ -38,6 +38,14 @@ module Data.Conduit.Parallel.Internal.ParallelA (
         waiter :: m ()
     }
 
+    -- | Run multiple ParArrows in parallel.
+    --
+    -- The code @parallelA num inner@ creates a ParArrow which
+    -- internally runs @num@ copies of the @inner@ ParArrow.  Pictorially,
+    -- this looks like:
+    --
+    -- ![image](docs/parallel.svg)
+    --
     parallelA :: forall m i o .
                     MonadUnliftIO m
                     => Int

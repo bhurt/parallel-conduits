@@ -21,9 +21,11 @@ extra-doc-files:     docs/fuse.svg
                         , docs/merge.svg
                         , docs/parallel.svg
                         , docs/proFunctor.svg
+                        , docs/routeA.svg
                         , docs/route.svg
                         , docs/simple.svg
                         , docs/tee.svg
+                        , docs/wrapA.svg
 
 Flag Devel
     Description:       Development build (enable warnings and less optimization)
