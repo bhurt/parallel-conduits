@@ -28,15 +28,15 @@ module Data.Conduit.Parallel.Internal.Type (
     fuseMap
 ) where
 
-    import qualified Control.Category                      as Cat
-    import           Control.Monad.Cont                    (ContT)
+    import qualified Control.Category                       as Cat
+    import           Control.Monad.Cont                     (ContT)
     import           Control.Monad.IO.Class
-    import           Control.Monad.IO.Unlift               (MonadUnliftIO)
-    import           Data.Conduit.Parallel.Internal.Copier (copier)
-    import qualified Data.Conduit.Parallel.Internal.Duct   as Duct
-    import           Data.Conduit.Parallel.Internal.Spawn  (spawn)
-    import qualified Data.Functor.Contravariant            as Contra
-    import qualified Data.Profunctor                       as Pro
+    import           Control.Monad.IO.Unlift                (MonadUnliftIO)
+    import           Data.Conduit.Parallel.Internal.Copier  (copier)
+    import qualified Data.Conduit.Parallel.Internal.ParDuct as Duct
+    import           Data.Conduit.Parallel.Internal.Spawn
+    import qualified Data.Functor.Contravariant             as Contra
+    import qualified Data.Profunctor                        as Pro
 
 
     newtype ParConduit m r i o = ParConduit {
@@ -44,7 +44,7 @@ module Data.Conduit.Parallel.Internal.Type (
                                         forall x .
                                         Duct.ReadDuct i
                                         -> Duct.WriteDuct o
-                                        -> ContT x m (m r) }
+                                        -> Control x m (m r) }
 
     instance Functor (ParConduit m r i) where
         fmap f c = ParConduit $
@@ -87,7 +87,7 @@ module Data.Conduit.Parallel.Internal.Type (
                     -> Duct.WriteDuct o
                     -> ContT t m (m r)
             go rd wd = do
-                (xrd, xwd) :: Duct.Duct x <- liftIO $ Duct.newDuct
+                (xrd, xwd) :: Duct.Duct x <- Duct.newDuct
                 r1 <- getParConduit pc1 rd xwd
                 r2 <- getParConduit pc2 xrd wd
                 pure $ fixr <$> r1 <*> r2
@@ -100,9 +100,9 @@ module Data.Conduit.Parallel.Internal.Type (
                     go :: Duct.ReadDuct a
                             -> Duct.WriteDuct a
                             -> ContT t m (m r)
-                    go rd wr = spawn . liftIO $ do
-                                    copier rd wr
-                                    pure mempty
+                    go rd wd = do
+                        r :: m () <- spawnWorker $ copier rd wd
+                        pure (mempty <$ r)
 
         (.) = flip $ fuseMap mappend
 

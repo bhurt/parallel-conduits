@@ -25,16 +25,17 @@ module Data.Conduit.Parallel.Internal.Utils (
     runM,
     Queue,
     makeQueue,
-    withCloseQueue,
-    queueAdd,
-    queueGet
+    withReadQueue,
+    withWriteQueue
 ) where
 
-    import           Control.Concurrent.STM               (retry)
+    import           Control.Concurrent.STM                 (retry)
+    import           Control.Monad.Cont
     import           Control.Monad.Trans.Maybe
-    import qualified Data.Conduit.Parallel.Internal.Duct  as Duct
-    import           Data.Sequence                        (Seq)
-    import qualified Data.Sequence                        as Seq
+    import qualified Data.Conduit.Parallel.Internal.ParDuct as Duct
+    import           Data.Conduit.Parallel.Internal.Spawn
+    import           Data.Sequence                          (Seq)
+    import qualified Data.Sequence                          as Seq
     import           Data.Void
     import           UnliftIO
 
@@ -51,46 +52,54 @@ module Data.Conduit.Parallel.Internal.Utils (
                 Duct.Closed -> pure Nothing
     {-# SPECIALIZE writeM :: (a -> IO Duct.Open) -> a -> MaybeT IO () #-}
 
-    runM :: forall m . Monad m => MaybeT m Void -> m ()
+    runM :: forall m r . Monad m => MaybeT m Void -> Client r m ()
     runM act = do
-        r :: Maybe Void <- runMaybeT act
+        let act1 :: m (Maybe Void)
+            act1 = runMaybeT act
+        r :: Maybe Void <- lift $ act1
         case r of
             Nothing -> pure ()
             Just v  -> absurd v
-    {-# SPECIALIZE runM :: MaybeT IO Void -> IO () #-}
+    {-# SPECIALIZE runM :: MaybeT IO Void -> Worker () #-}
 
 
     type Queue a = TVar (Seq (Maybe a))
 
-    makeQueue :: forall m a .
+    makeQueue :: forall m a x .
                     MonadIO m
-                    => m (Queue a)
+                    => Control x m (Queue a)
     makeQueue = liftIO $ newTVarIO (Seq.empty)
 
-    withCloseQueue :: forall m a b .
+    withReadQueue :: forall m a r .
+                        Queue a
+                        -> Client r m (MaybeT IO a)
+    withReadQueue que = pure $ doGet
+        where
+            doGet :: MaybeT IO a
+            doGet = MaybeT . atomically $ do
+                s <- readTVar que
+                case Seq.viewl s of
+                    Seq.EmptyL  -> retry
+                    (Just a) Seq.:< s2 -> do
+                        writeTVar que s2
+                        pure $ Just a
+                    Nothing Seq.:< _   -> do
+                        pure Nothing
+
+    withWriteQueue :: forall m a r .
                         MonadUnliftIO m
                         => Queue a
-                        -> m b
-                        -> m b
-    withCloseQueue que act = finally act doClose
+                        -> Client r m (a -> MaybeT IO ())
+    withWriteQueue que = ContT go
         where
-            doClose :: m ()
-            doClose = liftIO . atomically $ do
+            go :: ((a -> MaybeT IO ()) -> m r) -> m r
+            go f = finally (f writeQ) stop
+
+            stop :: m ()
+            stop = liftIO . atomically $ do
                         modifyTVar que (\s -> s Seq.|> Nothing)
 
-    queueAdd :: forall a .  Queue a -> a -> MaybeT IO ()
-    queueAdd que a = MaybeT . atomically $ do
-        modifyTVar que (\s -> s Seq.|> Just a)
-        pure $ Just ()
-
-    queueGet :: forall a .  Queue a -> MaybeT IO a
-    queueGet que = MaybeT . atomically $ do
-        s <- readTVar que
-        case Seq.viewl s of
-            Seq.EmptyL  -> retry
-            (Just a) Seq.:< s2 -> do
-                writeTVar que s2
-                pure $ Just a
-            Nothing Seq.:< _   -> do
-                pure Nothing
-
+            writeQ :: a -> MaybeT IO ()
+            writeQ a = MaybeT . atomically $ do
+                modifyTVar que (\s -> s Seq.|> (Just a))
+                pure $ Just ()

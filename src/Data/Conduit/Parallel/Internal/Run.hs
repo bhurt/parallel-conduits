@@ -21,11 +21,11 @@ module Data.Conduit.Parallel.Internal.Run (
     runParConduit
 ) where
 
-    import qualified Control.Monad.Cont                  as Cont
-    import qualified Data.Conduit.Parallel.Internal.Duct as Duct
-    import           Data.Conduit.Parallel.Internal.Type (ParConduit (..))
-    import           Data.Functor.Contravariant          (contramap)
-    import           Data.Void                           (Void, absurd)
+    import qualified Control.Monad.Cont                     as Cont
+    import qualified Data.Conduit.Parallel.Internal.ParDuct as Duct
+    import           Data.Conduit.Parallel.Internal.Type    (ParConduit (..))
+    import           Data.Functor.Contravariant             (contramap)
+    import           Data.Void                              (Void, absurd)
 
     runParConduit :: forall m r . ParConduit m r () Void -> m r
     runParConduit pc = do

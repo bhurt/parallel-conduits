@@ -21,8 +21,8 @@ module Data.Conduit.Parallel.Internal.Parallel (
     parallel
 ) where
 
-    import           Control.Monad.Cont
-    import           Data.Conduit.Parallel.Internal.Duct
+    import           Data.Conduit.Parallel.Internal.ParDuct
+    import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
     import           UnliftIO
 
@@ -48,11 +48,10 @@ module Data.Conduit.Parallel.Internal.Parallel (
             | num == 1  = inner
             | otherwise = ParConduit go
         where
-            go :: forall x . ReadDuct i -> WriteDuct o -> ContT x m (m r)
+            go :: forall x . ReadDuct i -> WriteDuct o -> Control x m (m r)
             go rd wd = do
-                liftIO $ do
-                    addReadOpens rd (num - 1)
-                    addWriteOpens wd (num - 1)
+                addReadOpens rd (num - 1)
+                addWriteOpens wd (num - 1)
                 rs :: [ m r ] <-
                     sequence . take num . repeat $ getParConduit inner rd wd
                 pure $ mconcat <$> sequence rs

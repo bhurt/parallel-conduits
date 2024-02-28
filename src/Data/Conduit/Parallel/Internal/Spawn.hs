@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
@@ -18,26 +19,47 @@
 -- notice.  Use at your own risk.
 --
 module Data.Conduit.Parallel.Internal.Spawn (
-    spawn,
-    spawnIO
+    Control,
+    Client,
+    Worker,
+    spawnClient,
+    spawnWorker
 ) where
 
-    import           Control.Monad.Cont      (ContT(..), lift)
-    import           Control.Monad.IO.Unlift (MonadUnliftIO, liftIO)
-    import qualified UnliftIO.Async          as Async
+    import qualified Control.Concurrent.Async as AsyncIO
+    import           Control.Monad.Cont
+    import           Control.Monad.IO.Unlift
+    import qualified UnliftIO.Async           as Async
 
-    spawn :: forall m a r .
+    type Control r m a = ContT r m a
+
+    type Client r m a = ContT r m a
+
+    type Worker a = Client () IO a
+
+    spawnClient :: forall m r x .
                 MonadUnliftIO m
-                => m a
-                -> ContT r m (m a)
-    spawn act = do
-            asy <- ContT $ Async.withAsync act
+                => Client r m r
+                -> Control x m (m r)
+    spawnClient client = do
+            asy <- ContT $ Async.withAsync task
             lift $ Async.link asy
             pure $ Async.wait asy
+        where
+            task :: m r
+            task = runContT client pure
 
-    spawnIO :: forall m a r .
-                MonadUnliftIO m
-                => IO a
-                -> ContT r m (m a)
-    spawnIO = spawn . liftIO
+    spawnWorker :: forall m x .
+                    MonadUnliftIO m
+                    => Worker ()
+                    -> Control x m (m ())
+    spawnWorker worker = do
+            asy <- ContT $ go1
+            lift $ Async.link asy
+            pure $ Async.wait asy
+        where
+            go1 :: (Async.Async () -> m x) -> m x
+            go1 f = withRunInIO $ \run -> AsyncIO.withAsync task (run . f)
 
+            task :: IO ()
+            task = runContT worker pure

@@ -23,16 +23,16 @@ module Data.Conduit.Parallel.Internal.LiftC (
 ) where
 
     import           Control.DeepSeq
-    import           Control.Exception                    (evaluate)
-    import           Control.Monad.Cont                   (ContT)
-    import           Control.Monad.IO.Class               (liftIO)
-    import           Control.Monad.IO.Unlift              (MonadUnliftIO)
-    import           Data.Conduit                         ((.|))
-    import qualified Data.Conduit                         as C
-    import qualified Data.Conduit.Parallel.Internal.Duct  as Duct
-    import           Data.Conduit.Parallel.Internal.Spawn (spawn)
-    import           Data.Conduit.Parallel.Internal.Type  (ParConduit (..))
-    import           Data.Void                            (Void)
+    import           Control.Exception                      (evaluate)
+    import           Control.Monad.IO.Class                 (liftIO)
+    import           Control.Monad.IO.Unlift                (MonadUnliftIO)
+    import           Control.Monad.Trans                    (lift)
+    import           Data.Conduit                           ((.|))
+    import qualified Data.Conduit                           as C
+    import           Data.Conduit.Parallel.Internal.ParDuct
+    import           Data.Conduit.Parallel.Internal.Spawn
+    import           Data.Conduit.Parallel.Internal.Type    (ParConduit (..))
+    import           Data.Void                              (Void)
 
     liftC :: forall m r i o .
                 MonadUnliftIO m
@@ -41,24 +41,23 @@ module Data.Conduit.Parallel.Internal.LiftC (
     liftC cdt = ParConduit go
         where
             go :: forall x .
-                    Duct.ReadDuct i
-                    -> Duct.WriteDuct o
-                    -> ContT x m (m r)
-            go rd wd = spawn (work rd wd)
+                    ReadDuct i
+                    -> WriteDuct o
+                    -> Control x m (m r)
+            go rd wd = spawnClient $ client rd wd
 
-            work :: Duct.ReadDuct i
-                    -> Duct.WriteDuct o
-                    -> m r
-            work src snk = 
-                Duct.withReadDuct src Nothing $ \rd ->
-                    Duct.withWriteDuct snk Nothing $ \wd ->
-                        let c1 :: C.ConduitT () o m r
-                            c1 = readConduit rd .| cdt
+            client :: ReadDuct i
+                    -> WriteDuct o
+                    -> Client r m r
+            client src snk = do
+                rd <- withReadDuct src
+                wd <- withWriteDuct snk
+                let c1 :: C.ConduitT () o m r
+                    c1 = readConduit rd .| cdt
 
-                            c2 :: C.ConduitT () Void m r
-                            c2 = C.fuseUpstream c1 $ writeConduit wd
-                        in
-                        C.runConduit c2
+                    c2 :: C.ConduitT () Void m r
+                    c2 = C.fuseUpstream c1 $ writeConduit wd
+                lift $ C.runConduit c2
 
             readConduit :: IO (Maybe i) -> C.ConduitT () i m ()
             readConduit rd = do
@@ -69,15 +68,15 @@ module Data.Conduit.Parallel.Internal.LiftC (
                         readConduit rd
                     Nothing -> pure ()
 
-            writeConduit :: (o -> IO Duct.Open) -> C.ConduitT o Void m ()
+            writeConduit :: (o -> IO Open) -> C.ConduitT o Void m ()
             writeConduit wd = do
                 x <- C.await
                 case x of
                     Just v  -> do
                         open <- liftIO $ wd v
                         case open of
-                            Duct.Open   -> writeConduit wd
-                            Duct.Closed -> pure ()
+                            Open   -> writeConduit wd
+                            Closed -> pure ()
                     Nothing -> pure ()
 
 
@@ -88,9 +87,9 @@ module Data.Conduit.Parallel.Internal.LiftC (
                 -> ParConduit m r i o
     forceC pc = ParConduit go
         where
-            go :: forall x .  Duct.ReadDuct i -> Duct.WriteDuct o -> ContT x m (m r)
+            go :: forall x .  ReadDuct i -> WriteDuct o -> Control x m (m r)
             go rd wd =
-                let wd' = Duct.contramapIO (evaluate . force) wd in
+                let wd' = contramapIO (evaluate . force) wd in
                 getParConduit pc rd wd'
 
 

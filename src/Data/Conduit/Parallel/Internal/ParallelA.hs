@@ -21,10 +21,9 @@ module Data.Conduit.Parallel.Internal.ParallelA (
     parallelA
 ) where
 
-    import           Control.Monad.Cont
     import           Control.Monad.Trans.Maybe
     import           Data.Conduit.Parallel.Internal.Arrow
-    import           Data.Conduit.Parallel.Internal.Duct
+    import           Data.Conduit.Parallel.Internal.ParDuct
     import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Utils
     import           Data.List.NonEmpty
@@ -59,57 +58,50 @@ module Data.Conduit.Parallel.Internal.ParallelA (
             go :: forall x .
                     ReadDuct i
                     -> WriteDuct o
-                    -> ContT x m (m ())
+                    -> Control x m (m ())
             go rdi wdo = do
                 lst :: NonEmpty (Foo m i o)
                     <- traverse doSpawn (1 :| [ 2 .. n ])
-                m1 <- spawnIO $ splitter rdi (input <$> lst)
-                m2 <- spawnIO $ fuser wdo (output <$> lst)
+                m1 <- spawnWorker $ splitter rdi (input <$> lst)
+                m2 <- spawnWorker $ fuser wdo (output <$> lst)
                 pure $ m1 >> m2 >> mapM_ id (waiter <$> lst)
 
-            doSpawn :: forall x . Int -> ContT x m (Foo m i o)
+            doSpawn :: forall x . Int -> Control x m (Foo m i o)
             doSpawn _ = do
-                (rdi, wdi) :: Duct i <- liftIO $ newDuct
-                (rdo, wdo) :: Duct o <- liftIO $ newDuct
+                (rdi, wdi) :: Duct i <- newDuct
+                (rdo, wdo) :: Duct o <- newDuct
                 w <- getParArrow pa rdi wdo
                 pure $ Foo {
                         input = wdi,
                         output = rdo,
                         waiter = w }
 
-            splitter :: ReadDuct i -> NonEmpty (WriteDuct i) -> IO ()
-            splitter rdi wdis =
-                flip runContT pure $ do
-                    ri <- ContT $ withReadDuct rdi Nothing
-                    wis :: NonEmpty (i -> IO Open)
-                        <- traverse (\wdi -> ContT $ withWriteDuct wdi Nothing) wdis
-                    lift $ 
-                        let recur :: NonEmpty (i -> IO Open) -> MaybeT IO Void
-                            recur ws = do
-                                i <- readM ri
-                                let (wi, ws') = case ws of
-                                                    y :| []     -> (y, wis)
-                                                    y :| (x:xs) -> (y, (x :| xs))
-                                writeM wi i
-                                recur ws'
-                        in
-                        runM $ recur wis
+            splitter :: ReadDuct i -> NonEmpty (WriteDuct i) -> Worker ()
+            splitter rdi wdis = do
+                ri <- withReadDuct rdi
+                wis :: NonEmpty (i -> IO Open) <- traverse withWriteDuct wdis
+                let recur :: NonEmpty (i -> IO Open) -> MaybeT IO Void
+                    recur ws = do
+                        i <- readM ri
+                        let (wi, ws') = case ws of
+                                            y :| []     -> (y, wis)
+                                            y :| (x:xs) -> (y, (x :| xs))
+                        writeM wi i
+                        recur ws'
+                runM $ recur wis
 
-            fuser :: WriteDuct o -> NonEmpty (ReadDuct o) -> IO ()
-            fuser wdo rdos =
-                flip runContT pure $ do
-                    ros :: NonEmpty (IO (Maybe o))
-                        <- traverse (\rdo -> ContT $ withReadDuct rdo Nothing) rdos
-                    wo <- ContT $ withWriteDuct wdo Nothing
-                    lift $ 
-                        let recur :: NonEmpty (IO (Maybe o)) -> MaybeT IO Void
-                            recur rs = do
-                                let (ro, rs') = case rs of
-                                                    y :| []     -> (y, ros)
-                                                    y :| (x:xs) -> (y, (x :| xs))
-                                o <- readM ro
-                                writeM wo o
-                                recur rs'
-                        in
-                        runM $ recur ros
+            fuser :: WriteDuct o -> NonEmpty (ReadDuct o) -> Worker ()
+            fuser wdo rdos = do
+                ros :: NonEmpty (IO (Maybe o))
+                    <- traverse withReadDuct rdos
+                wo <- withWriteDuct wdo
+                let recur :: NonEmpty (IO (Maybe o)) -> MaybeT IO Void
+                    recur rs = do
+                        let (ro, rs') = case rs of
+                                            y :| []     -> (y, ros)
+                                            y :| (x:xs) -> (y, (x :| xs))
+                        o <- readM ro
+                        writeM wo o
+                        recur rs'
+                runM $ recur ros
 

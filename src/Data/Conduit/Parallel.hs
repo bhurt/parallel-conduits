@@ -6,7 +6,16 @@
 -- Maintainer  : bhurt42@gmail.com
 -- Stability   : experimental
 --
-
+-- Short introduction.
+--
+-- = __Extended Introduction__
+--
+-- Extended introduction.
+--
+-- = Part Two
+--
+-- Part two.
+--
 module Data.Conduit.Parallel (
     -- * ParConduits
 

@@ -24,14 +24,13 @@ module Data.Conduit.Parallel.Internal.Tee (
     , mergeMany
 ) where
 
-    import           Control.Applicative                   (liftA2)
-    import           Control.Monad.Cont
+    import           Control.Applicative                    (liftA2)
     import           Data.Conduit.Parallel.Internal.Copier
-    import           Data.Conduit.Parallel.Internal.Duct
+    import           Data.Conduit.Parallel.Internal.ParDuct
     import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
-    import           Data.List.NonEmpty                    (NonEmpty (..))
-    import qualified Data.List.NonEmpty                    as NE
+    import           Data.List.NonEmpty                     (NonEmpty (..))
+    import qualified Data.List.NonEmpty                     as NE
     import           Data.Void
     import           UnliftIO
 
@@ -47,10 +46,11 @@ module Data.Conduit.Parallel.Internal.Tee (
             go :: forall x .
                     ReadDuct i
                     -> WriteDuct i
-                    -> ContT x m (m r)
+                    -> Control x m (m r)
             go rdi wdi = do
                 wds :: NonEmpty (WriteDuct i, m r) <- traverse start sinks
-                mu :: m () <- spawnIO $ duplicator rdi (NE.cons wdi (fst <$> wds))
+                mu :: m () <- spawnWorker $
+                                duplicator rdi (NE.cons wdi (fst <$> wds))
                 let x :: m r
                     xs :: [ m r ]
                     (x :| xs) = snd <$> wds
@@ -60,9 +60,9 @@ module Data.Conduit.Parallel.Internal.Tee (
 
             start :: forall x .
                         ParConduit m r i Void
-                        -> ContT x m (WriteDuct i, m r)
+                        -> Control x m (WriteDuct i, m r)
             start pc = do
-                (rdi, wdi) :: Duct i <- liftIO newDuct
+                (rdi, wdi) :: Duct i <- newDuct
                 let wdv :: WriteDuct Void
                     (_, wdv) = newClosedDuct
                 mr :: m r <- getParConduit pc rdi wdv
@@ -88,13 +88,13 @@ module Data.Conduit.Parallel.Internal.Tee (
             go :: forall x .
                     ReadDuct i
                     -> WriteDuct i
-                    -> ContT x m (m r)
+                    -> Control x m (m r)
             go rdi wdi = do
-                (rdi', wdi') :: Duct i <- liftIO newDuct
+                (rdi', wdi') :: Duct i <- newDuct
                 let wdv :: WriteDuct Void
                     (_, wdv) = newClosedDuct
                 mr :: m r <- getParConduit sink rdi' wdv
-                mu :: m () <- spawnIO $ duplicator rdi [ wdi, wdi' ]
+                mu :: m () <- spawnWorker $ duplicator rdi [ wdi, wdi' ]
                 pure $ mu >> mr
 
 
@@ -110,10 +110,10 @@ module Data.Conduit.Parallel.Internal.Tee (
             go :: forall x .
                     ReadDuct o
                     -> WriteDuct o
-                    -> ContT x m (m r)
+                    -> Control x m (m r)
             go rd wd = do
-                liftIO $ addWriteOpens wd (NE.length sources)
-                mu :: m () <- spawnIO $ copier rd wd
+                addWriteOpens wd (NE.length sources)
+                mu :: m () <- spawnWorker $ copier rd wd
                 let crd :: ReadDuct ()
                     (crd, _) = newClosedDuct
                 (x :| xs) :: NonEmpty (m r)
@@ -141,10 +141,10 @@ module Data.Conduit.Parallel.Internal.Tee (
             go :: forall x .
                     ReadDuct o
                     -> WriteDuct o
-                    -> ContT x m (m r)
+                    -> Control x m (m r)
             go rd wd = do
-                liftIO $ addWriteOpens wd 1
-                mu :: m () <- spawnIO $ copier rd wd
+                addWriteOpens wd 1
+                mu :: m () <- spawnWorker $ copier rd wd
                 let crd :: ReadDuct ()
                     (crd, _) = newClosedDuct
                 mr :: m r <- getParConduit source crd wd

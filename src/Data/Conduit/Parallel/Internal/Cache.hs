@@ -22,17 +22,16 @@ module Data.Conduit.Parallel.Internal.Cache (
     cacheA
 ) where
 
-    import           Control.Concurrent.STM               (retry)
-    import qualified Control.Exception                    as Ex
+    import           Control.Concurrent.STM                 (retry)
     import           Control.Monad.Cont
     import           Control.Monad.Trans.Maybe
-    import           Data.Conduit.Parallel.Internal.Arrow (ParArrow (..))
-    import           Data.Conduit.Parallel.Internal.Duct
+    import           Data.Conduit.Parallel.Internal.Arrow   (ParArrow (..))
+    import           Data.Conduit.Parallel.Internal.ParDuct
     import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
     import           Data.Conduit.Parallel.Internal.Utils
     import           Data.Void
-    import           Numeric.Natural                      (Natural)
+    import           Numeric.Natural                        (Natural)
     import           UnliftIO
 
     data Cache i = Cache {
@@ -45,69 +44,71 @@ module Data.Conduit.Parallel.Internal.Cache (
                         <$> newTBQueueIO size
                         <*> newTVarIO False
 
-    withCache :: forall i a . Cache i -> IO a -> IO a
-    withCache che act = Ex.finally act closeCache
+    withReadCache :: forall i . Cache i -> Worker (MaybeT IO i)
+    withReadCache che = pure $ doGet
         where
-            closeCache :: IO ()
-            closeCache = atomically $ writeTVar (closed che) True
+            doGet :: MaybeT IO i
+            doGet = MaybeT . atomically $ do
+                mi <- tryReadTBQueue (queue che)
+                case mi of
+                    Just i  -> pure $ Just i
+                    Nothing -> do
+                        f <- readTVar (closed che)
+                        if (f)
+                        then pure Nothing
+                        else retry
 
-    load :: forall i . Cache i -> i -> MaybeT IO ()
-    load che value =
-        MaybeT . atomically $ do
-            isClosed <- readTVar (closed che)
-            if (isClosed)
-            then
-                pure Nothing
-            else do
-                writeTBQueue (queue che) value
-                pure $ Just ()
+    withWriteCache :: forall i . Cache i -> Worker (i -> MaybeT IO ())
+    withWriteCache che = ContT go
+        where
+            go :: ((i -> MaybeT IO ()) -> IO ()) -> IO ()
+            go f = finally (f doPut) stop
 
-    unload :: forall i . Cache i -> MaybeT IO i
-    unload che =
-        MaybeT . atomically $ do
-            mi <- tryReadTBQueue (queue che)
-            case mi of
-                Just i  -> pure $ Just i
-                Nothing -> do
-                    f <- readTVar (closed che)
-                    if (f)
-                    then pure Nothing
-                    else retry
+            stop :: IO ()
+            stop = atomically $ writeTVar (closed che) True
 
-    loader :: forall i . Cache i -> ReadDuct i -> IO ()
-    loader che rdi =
-        withCache che $
-            withReadDuct rdi Nothing $ \ri ->
-                let recur :: MaybeT IO Void
-                    recur = do
-                        i <- readM ri
-                        load che i
-                        recur
-                in
-                runM recur
+            doPut :: i -> MaybeT IO ()
+            doPut i = MaybeT . atomically $ do
+                isClosed <- readTVar (closed che)
+                if (isClosed)
+                then
+                    pure Nothing
+                else do
+                    writeTBQueue (queue che) i
+                    pure $ Just ()
 
-    unloader :: forall i . Cache i -> WriteDuct i -> IO ()
-    unloader che wdi =
-        withCache che $
-            withWriteDuct wdi Nothing $ \wi ->
-                let recur :: MaybeT IO Void
-                    recur = do
-                        i <- unload che
-                        writeM wi i
-                        recur
-                in
-                runM recur
+    loader :: forall i . Cache i -> ReadDuct i -> Worker ()
+    loader che rdi = do
+        wc <- withWriteCache che
+        ri <- withReadDuct rdi
+        let recur :: MaybeT IO Void
+            recur = do
+                i <- readM ri
+                wc i
+                recur
+        runM recur
+
+    unloader :: forall i . Cache i -> WriteDuct i -> Worker ()
+    unloader che wdi = do
+        rc <- withReadCache che
+        wi <- withWriteDuct wdi
+        let recur :: MaybeT IO Void
+            recur = do
+                i <- rc
+                writeM wi i
+                recur
+        runM recur
 
     doCache :: forall m i x .
                 MonadUnliftIO m
                 => Natural
                 -> ReadDuct i
                 -> WriteDuct i
-                -> ContT x m (m ())
+                -> Control x m (m ())
     doCache size rdi wdi = do
         che <- liftIO $ makeCache size
-        m1 <- spawnIO $ loader che rdi
-        m2 <- spawnIO $ unloader che wdi
+        m1 <- spawnWorker $ loader che rdi
+        m2 <- spawnWorker $ unloader che wdi
         pure $ m1 >> m2
 
     -- | Create a caching ParConduit.

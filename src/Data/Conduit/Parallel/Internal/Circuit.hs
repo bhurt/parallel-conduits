@@ -23,10 +23,9 @@ module Data.Conduit.Parallel.Internal.Circuit (
     traverseC
 ) where
 
-    import           Control.Monad.Cont
     import           Data.Bitraversable
     import           Data.Conduit.Parallel.Internal.Copier
-    import           Data.Conduit.Parallel.Internal.Duct
+    import           Data.Conduit.Parallel.Internal.ParDuct
     import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
     import           UnliftIO
@@ -47,14 +46,14 @@ module Data.Conduit.Parallel.Internal.Circuit (
             go :: forall x .
                     ReadDuct (f i1 i2)
                     -> WriteDuct o
-                    -> ContT x m (m r)
+                    -> Control x m (m r)
             go rdf wdo = do
-                (rdi1, wdi1) :: Duct i1 <- liftIO $ newDuct
-                (rdi2, wdi2) :: Duct i2 <- liftIO $ newDuct
-                liftIO $ addWriteOpens wdo 1
+                (rdi1, wdi1) :: Duct i1 <- newDuct
+                (rdi2, wdi2) :: Duct i2 <- newDuct
+                addWriteOpens wdo 1
                 mr1 <- getParConduit pc1 rdi1 wdo
                 mr2 <- getParConduit pc2 rdi2 wdo
-                mu  <- spawnIO $ direct rdf wdi1 wdi2
+                mu  <- spawnWorker $ direct rdf wdi1 wdi2
                 pure $ do
                     () <- mu
                     r1 <- mr1
@@ -75,13 +74,13 @@ module Data.Conduit.Parallel.Internal.Circuit (
             go :: forall x .
                     ReadDuct i
                     -> WriteDuct o
-                    -> ContT x m (m r)
+                    -> Control x m (m r)
             go rdi wro = do
-                (rdf, wdf) :: Duct (f i o) <- liftIO $ newDuct
-                (rdi', wdi') :: Duct i <- liftIO $ newDuct
-                liftIO $ addWriteOpens wdi' 1
-                m1 <- spawnIO $ direct rdf wdi' wro
-                m2 <- spawnIO $ copier rdi wdi'
+                (rdf, wdf) :: Duct (f i o) <- newDuct
+                (rdi', wdi') :: Duct i <- newDuct
+                addWriteOpens wdi' 1
+                m1 <- spawnWorker $ direct rdf wdi' wro
+                m2 <- spawnWorker $ copier rdi wdi'
                 mr <- getParConduit inner rdi' wdf
                 pure $ m1 >> m2 >> mr
 
@@ -94,6 +93,6 @@ module Data.Conduit.Parallel.Internal.Circuit (
             go :: forall x .
                     ReadDuct (f a)
                     -> WriteDuct a
-                    -> ContT x m (m ())
-            go rdf wda = spawnIO $ traverser rdf wda
+                    -> Control x m (m ())
+            go rdf wda = spawnWorker $ traverser rdf wda
 
