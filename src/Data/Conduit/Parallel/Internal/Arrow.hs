@@ -32,7 +32,6 @@ module Data.Conduit.Parallel.Internal.Arrow (
     import qualified Control.Category                       as Cat
     import           Control.DeepSeq
     import qualified Control.Exception                      as Ex
-    import           Control.Monad.Trans.Maybe
     import           Control.Selective
     import           Data.Bitraversable
     import           Data.Conduit.Parallel.Internal.Copier  (copier)
@@ -170,7 +169,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
                 reado1  :: Reader o1        <- withReadDuct rdo1
                 reado2  :: Reader o2        <- withReadDuct rdo2
                 writefo :: Writer (f o1 o2) <- withWriteDuct wdfo
-                let recur :: MaybeT IO Void
+                let recur :: RecurM Void
                     recur = do
                         fu :: f () () <- readq
                         fo :: f o1 o2 <- bitraverse
@@ -398,7 +397,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
                     writeq  :: Writer (IORef (Maybe d)) <- withWriteQueue que
                     readb   :: Reader b                 <- withReadDuct rdb
                     writebd :: Writer (b, d)            <- withWriteDuct wdbd
-                    let recur :: MaybeT IO Void
+                    let recur :: RecurM Void
                         recur = do
                             b :: b <- readb
                             ref :: IORef (Maybe d)
