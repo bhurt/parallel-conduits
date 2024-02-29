@@ -20,7 +20,6 @@
 --
 module Data.Conduit.Parallel.Internal.Spawn (
     Control,
-    Client,
     Worker,
     spawnClient,
     spawnWorker
@@ -33,21 +32,16 @@ module Data.Conduit.Parallel.Internal.Spawn (
 
     type Control r m a = ContT r m a
 
-    type Client r m a = ContT r m a
-
-    type Worker a = Client () IO a
+    type Worker a = ContT () IO a
 
     spawnClient :: forall m r x .
                 MonadUnliftIO m
-                => Client r m r
+                => m r
                 -> Control x m (m r)
     spawnClient client = do
-            asy <- ContT $ Async.withAsync task
-            lift $ Async.link asy
-            pure $ Async.wait asy
-        where
-            task :: m r
-            task = runContT client pure
+        asy <- ContT $ Async.withAsync client
+        lift $ Async.link asy
+        pure $ Async.wait asy
 
     spawnWorker :: forall m x .
                     MonadUnliftIO m

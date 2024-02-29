@@ -20,86 +20,139 @@
 -- notice.  Use at your own risk.
 --
 module Data.Conduit.Parallel.Internal.Utils (
-    readM,
-    writeM,
-    runM,
+    RecurM,
+    runRecurM,
+    Reader,
+    Writer,
     Queue,
     makeQueue,
     withReadQueue,
-    withWriteQueue
+    withWriteQueue,
+    BQueue,
+    makeBQueue,
+    withReadBQueue,
+    withWriteBQueue,
+    finalize
 ) where
 
-    import           Control.Concurrent.STM                 (retry)
+    import           Control.Concurrent.STM
+    import qualified Control.Exception                    as Ex
     import           Control.Monad.Cont
     import           Control.Monad.Trans.Maybe
-    import qualified Data.Conduit.Parallel.Internal.ParDuct as Duct
     import           Data.Conduit.Parallel.Internal.Spawn
-    import           Data.Sequence                          (Seq)
-    import qualified Data.Sequence                          as Seq
+    import           Data.Sequence                        (Seq)
+    import qualified Data.Sequence                        as Seq
     import           Data.Void
-    import           UnliftIO
 
-    readM :: forall a m . MonadIO m => IO (Maybe a) -> MaybeT m a
-    readM = MaybeT . liftIO
-    {-# SPECIALIZE readM :: IO (Maybe a ) -> MaybeT IO a #-}
+    type RecurM a = MaybeT IO a
 
-    writeM :: forall a m . MonadIO m => (a -> IO Duct.Open) -> a -> MaybeT m ()
-    writeM wr a =
-        MaybeT $ do
-            open <- liftIO $ wr a
-            case open of
-                Duct.Open   -> pure $ Just ()
-                Duct.Closed -> pure Nothing
-    {-# SPECIALIZE writeM :: (a -> IO Duct.Open) -> a -> MaybeT IO () #-}
+    type Reader a = RecurM a
 
-    runM :: forall m r . Monad m => MaybeT m Void -> Client r m ()
-    runM act = do
-        let act1 :: m (Maybe Void)
-            act1 = runMaybeT act
-        r :: Maybe Void <- lift $ act1
+    type Writer a = a -> RecurM ()
+
+    runRecurM :: RecurM Void -> Worker ()
+    runRecurM act = lift $ do
+        r :: Maybe Void <- runMaybeT act
         case r of
             Nothing -> pure ()
             Just v  -> absurd v
-    {-# SPECIALIZE runM :: MaybeT IO Void -> Worker () #-}
+
+    finalize :: IO () -> Worker ()
+    finalize fini = ContT go
+        where
+            go :: (() -> IO r) -> IO r
+            go f = Ex.finally (f ()) fini
+
+    data Cache a = Cache {
+                        queue :: TVar (Seq a),
+                        closed :: TVar Bool
+                    }
+
+    makeCache :: forall a m r . MonadIO m => Control r m (Cache a)
+    makeCache = liftIO $ Cache <$> newTVarIO Seq.empty <*> newTVarIO False
+
+    makeCacheReader :: forall a .  Cache a -> Reader a
+    makeCacheReader cache = MaybeT . atomically $ do
+        sa :: Seq a <- readTVar (queue cache)
+        case Seq.viewl sa of
+            a Seq.:< s2 -> do
+                writeTVar (queue cache) s2
+                pure $ Just a
+            Seq.EmptyL -> do
+                isClosed :: Bool <- readTVar (closed cache)
+                if isClosed
+                then pure Nothing
+                else retry
+
+    makeCacheWriter :: forall a .
+                        (Seq a -> Bool)
+                        -> Cache a
+                        -> Writer a
+    makeCacheWriter canWrite cache = \a -> MaybeT . atomically $ do
+        isClosed <- readTVar (closed cache)
+        if isClosed
+        then pure Nothing
+        else do
+            s :: Seq a <- readTVar (queue cache)
+            if (canWrite s)
+            then do
+                writeTVar (queue cache) (s Seq.:|> a)
+                pure $ Just ()
+            else
+                retry
 
 
-    type Queue a = TVar (Seq (Maybe a))
+    closeCache :: forall a .  Cache a -> IO ()
+    closeCache cache = atomically $ writeTVar (closed cache) True
+
+
+    -- | Unbounded queues.
+    --
+    -- Used in Arrows, where the bounding is done by the ducts the
+    -- Queues are bypassing.
+    --
+    newtype Queue a = Queue { getCache :: Cache a }
 
     makeQueue :: forall m a x .
                     MonadIO m
                     => Control x m (Queue a)
-    makeQueue = liftIO $ newTVarIO (Seq.empty)
+    makeQueue = Queue <$> makeCache
 
-    withReadQueue :: forall m a r .
-                        Queue a
-                        -> Client r m (MaybeT IO a)
-    withReadQueue que = pure $ doGet
-        where
-            doGet :: MaybeT IO a
-            doGet = MaybeT . atomically $ do
-                s <- readTVar que
-                case Seq.viewl s of
-                    Seq.EmptyL  -> retry
-                    (Just a) Seq.:< s2 -> do
-                        writeTVar que s2
-                        pure $ Just a
-                    Nothing Seq.:< _   -> do
-                        pure Nothing
+    withReadQueue :: forall a . Queue a -> Worker (Reader a)
+    withReadQueue que = do
+        finalize (closeCache (getCache que))
+        pure $ makeCacheReader (getCache que)
 
-    withWriteQueue :: forall m a r .
-                        MonadUnliftIO m
-                        => Queue a
-                        -> Client r m (a -> MaybeT IO ())
-    withWriteQueue que = ContT go
-        where
-            go :: ((a -> MaybeT IO ()) -> m r) -> m r
-            go f = finally (f writeQ) stop
+    withWriteQueue :: forall a . Queue a -> Worker (Writer a)
+    withWriteQueue que = do
+        finalize (closeCache (getCache que))
+        pure $ makeCacheWriter (const True) (getCache que)
 
-            stop :: m ()
-            stop = liftIO . atomically $ do
-                        modifyTVar que (\s -> s Seq.|> Nothing)
 
-            writeQ :: a -> MaybeT IO ()
-            writeQ a = MaybeT . atomically $ do
-                modifyTVar que (\s -> s Seq.|> (Just a))
-                pure $ Just ()
+    -- | Bounded sized queue
+    --
+    -- Used for caching in ParConduits and ParArrows.
+    data BQueue a = BQueue { 
+                        getBCache :: Cache a,
+                        maxLen :: Int
+                    }
+
+    makeBQueue :: forall m a x .  MonadIO m => Int -> Control x m (BQueue a)
+    makeBQueue size 
+        | size <= 0 = error "Non-positive size for makeBQueue"
+        | otherwise = do
+            c <- makeCache
+            pure $ BQueue { getBCache = c, maxLen = size }
+
+    withReadBQueue :: forall a .  BQueue a -> Worker (Reader a)
+    withReadBQueue bque = do
+        finalize (closeCache (getBCache bque))
+        pure $ makeCacheReader (getBCache bque)
+
+    withWriteBQueue :: forall a .  BQueue a -> Worker (Writer a)
+    withWriteBQueue bque = do
+        finalize (closeCache (getBCache bque))
+        pure $ makeCacheWriter
+                (\s -> Seq.length s < maxLen bque)
+                (getBCache bque)
+

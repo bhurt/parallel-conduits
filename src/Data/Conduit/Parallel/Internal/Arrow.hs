@@ -32,12 +32,12 @@ module Data.Conduit.Parallel.Internal.Arrow (
     import qualified Control.Category                       as Cat
     import           Control.DeepSeq
     import qualified Control.Exception                      as Ex
-    import           Control.Monad.Cont                     (lift)
     import           Control.Monad.Trans.Maybe
     import           Control.Selective
     import           Data.Bitraversable
     import           Data.Conduit.Parallel.Internal.Copier  (copier)
     import           Data.Conduit.Parallel.Internal.Flip
+    import           Data.Conduit.Parallel.Internal.LiftC
     import           Data.Conduit.Parallel.Internal.ParDuct
     import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
@@ -87,32 +87,32 @@ module Data.Conduit.Parallel.Internal.Arrow (
                         -> WriteDuct i
                         -> Worker ()
             splitter que rdfi wdi = do
-                wq <- withWriteQueue que
-                rfi <- withReadDuct rdfi
-                wi <- withWriteDuct wdi
-                let recur :: MaybeT IO Void
+                writeq :: Writer (f ()) <- withWriteQueue que
+                readfi :: Reader (f i)  <- withReadDuct rdfi
+                writei :: Writer i      <- withWriteDuct wdi
+                let recur :: RecurM Void
                     recur = do
-                        fi :: f i <- readM rfi
-                        fu :: f () <- traverse (writeM wi) fi
-                        wq fu
+                        fi :: f i <- readfi
+                        fu :: f () <- traverse writei fi
+                        writeq fu
                         recur
-                runM recur
+                runRecurM recur
 
             fuser :: Queue (f ())
                         -> ReadDuct o
                         -> WriteDuct (f o)
                         -> Worker ()
             fuser que rdo wdfo = do
-                rq <- withReadQueue que
-                ro <- withReadDuct rdo
-                wfo <- withWriteDuct wdfo
-                let recur :: MaybeT IO Void
+                readq   :: Reader (f ()) <- withReadQueue que
+                reado   :: Reader o      <- withReadDuct rdo
+                writefo :: Writer (f o)  <- withWriteDuct wdfo
+                let recur :: RecurM Void
                     recur = do
-                        fu :: f () <- rq
-                        fo :: f o <- traverse (\() -> readM ro) fu
-                        writeM wfo fo
+                        fu :: f () <- readq
+                        fo :: f o <- traverse (\() -> reado) fu
+                        writefo fo
                         recur
-                runM recur
+                runRecurM recur
 
     -- | Route a bitraversable structure to either of two inner ParArrows.
     --
@@ -148,20 +148,17 @@ module Data.Conduit.Parallel.Internal.Arrow (
                         -> WriteDuct i2
                         -> Worker ()
             splitter que rdfi wdi1 wdi2 = do
-                wq <- withWriteQueue que
-                rfi <- withReadDuct rdfi
-                wi1 <- withWriteDuct wdi1
-                wi2 <- withWriteDuct wdi2
-                let recur :: MaybeT IO Void
+                writeq  :: Writer (f () ()) <- withWriteQueue que
+                readfi  :: Reader (f i1 i2) <- withReadDuct rdfi
+                writei1 :: Writer i1        <- withWriteDuct wdi1
+                writei2 :: Writer i2        <- withWriteDuct wdi2
+                let recur :: RecurM Void
                     recur = do
-                        fi :: f i1 i2 <- readM rfi
-                        fu :: f () () <- bitraverse
-                                            (writeM wi1)
-                                            (writeM wi2)
-                                            fi
-                        wq fu
+                        fi :: f i1 i2 <- readfi
+                        fu :: f () () <- bitraverse writei1 writei2 fi
+                        writeq fu
                         recur
-                runM recur
+                runRecurM recur
 
             fuser :: Queue (f () ())
                         -> ReadDuct o1
@@ -169,20 +166,20 @@ module Data.Conduit.Parallel.Internal.Arrow (
                         -> WriteDuct (f o1 o2)
                         -> Worker ()
             fuser que rdo1 rdo2 wdfo = do
-                rq <- withReadQueue que
-                ro1 <- withReadDuct rdo1
-                ro2 <- withReadDuct rdo2
-                wfo <- withWriteDuct wdfo
+                readq   :: Reader (f () ()) <- withReadQueue que
+                reado1  :: Reader o1        <- withReadDuct rdo1
+                reado2  :: Reader o2        <- withReadDuct rdo2
+                writefo :: Writer (f o1 o2) <- withWriteDuct wdfo
                 let recur :: MaybeT IO Void
                     recur = do
-                        fu :: f () () <- rq
+                        fu :: f () () <- readq
                         fo :: f o1 o2 <- bitraverse
-                                            (\() -> readM ro1)
-                                            (\() -> readM ro2)
+                                            (\() -> reado1)
+                                            (\() -> reado2)
                                             fu
-                        writeM wfo fo
+                        writefo fo
                         recur
-                runM recur
+                runRecurM recur
 
     -- | Lift a Kleisli arrow into a ParArrow.
     --
@@ -192,23 +189,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
     -- pipeline itself.  But this entire pipeline will be executed in
     -- a single thread.
     liftK :: forall m i o . MonadUnliftIO m => Kleisli m i o -> ParArrow m i o
-    liftK (Kleisli f) = ParArrow go
-        where
-            go :: forall x .  ReadDuct i -> WriteDuct o -> Control x m (m ())
-            go rdi wdo = spawnClient $ client rdi wdo
-
-            client :: ReadDuct i -> WriteDuct o -> Client () m ()
-            client rdi wdo = do
-                ri <- withReadDuct rdi
-                wo <- withWriteDuct wdo
-                let recur :: MaybeT m Void
-                    recur = do
-                        i <- readM ri
-                        o <- lift $ f i
-                        writeM wo o
-                        recur
-                runM recur
-
+    liftK (Kleisli f) = ParArrow $ liftF f
 
     instance Functor (ParArrow m i) where
         fmap f c = ParArrow $
@@ -337,16 +318,16 @@ module Data.Conduit.Parallel.Internal.Arrow (
                             -> Queue i
                             -> Worker ()
                 shim1 rdi wdi quei = do
-                    wqi <- withWriteQueue quei
-                    ri <- withReadDuct rdi
-                    wi <- withWriteDuct wdi
-                    let recur :: MaybeT IO Void
+                    writeq :: Writer i <- withWriteQueue quei
+                    readi  :: Reader i <- withReadDuct rdi
+                    writei :: Writer i <- withWriteDuct wdi
+                    let recur :: RecurM Void
                         recur = do
-                            i :: i <- readM ri
-                            writeM wi i
-                            wqi i
+                            i :: i <- readi
+                            writei i
+                            writeq i
                             recur
-                    runM recur
+                    runRecurM recur
 
                 shim2 :: Queue i
                             -> ReadDuct (Either a b)
@@ -354,41 +335,41 @@ module Data.Conduit.Parallel.Internal.Arrow (
                             -> WriteDuct i
                             -> Worker ()
                 shim2 quei rde quee wdi = do
-                    rqi <- withReadQueue quei
-                    wqe <- withWriteQueue quee
-                    re <- withReadDuct rde
-                    wi <- withWriteDuct wdi
-                    let recur :: MaybeT IO Void
+                    readqi  :: Reader i            <- withReadQueue quei
+                    writeqe :: Writer (Either a b) <- withWriteQueue quee
+                    reade   :: Reader (Either a b) <- withReadDuct rde
+                    writei  :: Writer i            <- withWriteDuct wdi
+                    let recur :: RecurM Void
                         recur = do
-                            e :: Either a b <- readM re
-                            i :: i <- rqi
+                            e :: Either a b <- reade
+                            i :: i <- readqi
                             case e of
-                                Left _  -> writeM wi i
+                                Left _  -> writei i
                                 Right _ -> pure ()
-                            wqe e
+                            writeqe e
                             recur
-                    runM recur
+                    runRecurM recur
 
                 shim3 :: ReadDuct (a -> b)
                             -> Queue (Either a b)
                             -> WriteDuct b
                             -> Worker ()
                 shim3 rdf quee wdb = do
-                    rqe <- withReadQueue quee
-                    rf <- withReadDuct rdf
-                    wb <- withWriteDuct wdb
-                    let recur :: MaybeT IO Void
+                    readqe :: Reader (Either a b) <- withReadQueue quee
+                    readf  :: Reader (a -> b)     <- withReadDuct rdf
+                    writeb :: Writer b            <- withWriteDuct wdb
+                    let recur :: RecurM Void
                         recur = do
-                            e :: Either a b <- rqe
+                            e :: Either a b <- readqe
                             b :: b <-
                                 case e of
                                     Left a -> do
-                                        f <- readM rf
+                                        f <- readf
                                         pure $ f a
                                     Right b -> pure b
-                            writeM wb b
+                            writeb b
                             recur
-                    runM recur
+                    runRecurM recur
 
     instance MonadUnliftIO m => ArrowLoop (ParArrow m) where
         loop :: forall b c d .
@@ -414,18 +395,18 @@ module Data.Conduit.Parallel.Internal.Arrow (
                             -> WriteDuct (b, d)
                             -> Worker ()
                 splitter que rdb wdbd = do
-                    wq <- withWriteQueue que
-                    rb <- withReadDuct rdb
-                    wbd <- withWriteDuct wdbd
+                    writeq  :: Writer (IORef (Maybe d)) <- withWriteQueue que
+                    readb   :: Reader b                 <- withReadDuct rdb
+                    writebd :: Writer (b, d)            <- withWriteDuct wdbd
                     let recur :: MaybeT IO Void
                         recur = do
-                            b <- readM rb
+                            b :: b <- readb
                             ref :: IORef (Maybe d)
                                 <- liftIO $ newIORef Nothing
-                            wq ref
-                            writeM wbd (b, getRef ref)
+                            writeq ref
+                            writebd (b, getRef ref)
                             recur
-                    runM recur
+                    runRecurM recur
 
                 getRef :: IORef (Maybe d) -> d
                 getRef ref =
@@ -442,17 +423,17 @@ module Data.Conduit.Parallel.Internal.Arrow (
                         -> WriteDuct c
                         -> Worker ()
                 fuser que rdcd wdc = do
-                    rq <- withReadQueue que
-                    rcd <- withReadDuct rdcd
-                    wc <- withWriteDuct wdc
-                    let recur :: MaybeT IO Void
+                    readq  :: Reader (IORef (Maybe d)) <- withReadQueue que
+                    readcd :: Reader (c, d)            <- withReadDuct rdcd
+                    writec :: Writer c                 <- withWriteDuct wdc
+                    let recur :: RecurM Void
                         recur = do
-                            ref <- rq
-                            (c, d) <- readM rcd
+                            ref :: IORef (Maybe d) <- readq
+                            (c, d) :: (c, d) <- readcd
                             liftIO $ writeIORef ref (Just d)
-                            writeM wc c
+                            writec c
                             recur
-                    runM recur
+                    runRecurM recur
 
     -- | Convert a ParArrow to a ParConduit
     --

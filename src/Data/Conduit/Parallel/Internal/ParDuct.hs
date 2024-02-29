@@ -44,9 +44,10 @@ module Data.Conduit.Parallel.Internal.ParDuct(
 
 
     import           Control.Monad.Cont
+    import           Control.Monad.Trans.Maybe
     import qualified Data.Conduit.Parallel.Internal.Duct  as Duct
     import           Data.Conduit.Parallel.Internal.Spawn
-    import           UnliftIO
+    import           Data.Conduit.Parallel.Internal.Utils
 
 
     newDuct :: forall a m x . MonadIO m => Control x m (Duct.Duct a)
@@ -55,17 +56,21 @@ module Data.Conduit.Parallel.Internal.ParDuct(
     newFullDuct :: forall a m x . MonadIO m => a -> Control x m (Duct.Duct a)
     newFullDuct a = liftIO $ Duct.newFullDuct a
 
-    withReadDuct :: forall a m r .
-                    MonadUnliftIO m
-                    => Duct.ReadDuct a
-                    -> Client r m (IO (Maybe a))
-    withReadDuct rd = ContT $ Duct.withReadDuct rd Nothing
+    withReadDuct :: forall a .  Duct.ReadDuct a -> Worker (Reader a)
+    withReadDuct rd = do
+        r :: IO (Maybe a) <- ContT $ Duct.withReadDuct rd Nothing
+        pure $ MaybeT r
 
-    withWriteDuct :: forall a m r .
-                        MonadUnliftIO m
-                        => Duct.WriteDuct a
-                        -> Client r m (a -> IO Duct.Open)
-    withWriteDuct wd = ContT $ Duct.withWriteDuct wd Nothing
+    withWriteDuct :: forall a . Duct.WriteDuct a -> Worker (Writer a)
+    withWriteDuct wd = do
+        wio :: (a -> IO Duct.Open) <- ContT $ Duct.withWriteDuct wd Nothing
+        let wm :: a -> RecurM ()
+            wm a = MaybeT $ do
+                open <- wio a
+                case open of
+                    Duct.Open   -> pure $ Just ()
+                    Duct.Closed -> pure Nothing
+        pure wm
 
     addReadOpens :: forall a m x .
                     MonadIO m

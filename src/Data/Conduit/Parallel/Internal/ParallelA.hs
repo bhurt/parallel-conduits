@@ -21,7 +21,6 @@ module Data.Conduit.Parallel.Internal.ParallelA (
     parallelA
 ) where
 
-    import           Control.Monad.Trans.Maybe
     import           Data.Conduit.Parallel.Internal.Arrow
     import           Data.Conduit.Parallel.Internal.ParDuct
     import           Data.Conduit.Parallel.Internal.Spawn
@@ -78,30 +77,29 @@ module Data.Conduit.Parallel.Internal.ParallelA (
 
             splitter :: ReadDuct i -> NonEmpty (WriteDuct i) -> Worker ()
             splitter rdi wdis = do
-                ri <- withReadDuct rdi
-                wis :: NonEmpty (i -> IO Open) <- traverse withWriteDuct wdis
-                let recur :: NonEmpty (i -> IO Open) -> MaybeT IO Void
+                readi :: Reader i            <- withReadDuct rdi
+                wis   :: NonEmpty (Writer i) <- traverse withWriteDuct wdis
+                let recur :: NonEmpty (Writer i) -> RecurM Void
                     recur ws = do
-                        i <- readM ri
+                        i <- readi
                         let (wi, ws') = case ws of
                                             y :| []     -> (y, wis)
                                             y :| (x:xs) -> (y, (x :| xs))
-                        writeM wi i
+                        wi i
                         recur ws'
-                runM $ recur wis
+                runRecurM $ recur wis
 
             fuser :: WriteDuct o -> NonEmpty (ReadDuct o) -> Worker ()
             fuser wdo rdos = do
-                ros :: NonEmpty (IO (Maybe o))
-                    <- traverse withReadDuct rdos
-                wo <- withWriteDuct wdo
-                let recur :: NonEmpty (IO (Maybe o)) -> MaybeT IO Void
+                ros :: NonEmpty (Reader o) <- traverse withReadDuct rdos
+                wo  :: Writer o            <- withWriteDuct wdo
+                let recur :: NonEmpty (Reader o) -> RecurM Void
                     recur rs = do
                         let (ro, rs') = case rs of
                                             y :| []     -> (y, ros)
                                             y :| (x:xs) -> (y, (x :| xs))
-                        o <- readM ro
-                        writeM wo o
+                        o <- ro
+                        wo o
                         recur rs'
-                runM $ recur ros
+                runRecurM $ recur ros
 

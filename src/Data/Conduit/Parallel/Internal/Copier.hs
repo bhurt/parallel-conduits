@@ -25,7 +25,6 @@ module Data.Conduit.Parallel.Internal.Copier (
     traverser
 ) where
 
-    import           Control.Monad.Trans.Maybe
     import           Data.Bitraversable
     import           Data.Conduit.Parallel.Internal.ParDuct
     import           Data.Conduit.Parallel.Internal.Spawn
@@ -38,14 +37,14 @@ module Data.Conduit.Parallel.Internal.Copier (
                 -> WriteDuct a
                 -> Worker ()
     copier src snk = do
-        ra <- withReadDuct src
-        wa <- withWriteDuct snk
-        let recur :: MaybeT IO Void
+        reada :: Reader a <- withReadDuct src
+        writea :: Writer a <- withWriteDuct snk
+        let recur :: RecurM Void
             recur = do
-                a <- readM ra
-                writeM wa a
+                a <- reada
+                writea a
                 recur
-        runM recur
+        runRecurM recur
 
     direct :: forall a b f .
                 Bitraversable f
@@ -54,18 +53,15 @@ module Data.Conduit.Parallel.Internal.Copier (
                 -> WriteDuct b
                 -> Worker ()
     direct rdf wda wdb = do
-        rf <- withReadDuct rdf
-        wa <- withWriteDuct wda
-        wb <- withWriteDuct wdb
-        let recur :: MaybeT IO Void
+        readf  :: Reader (f a b) <- withReadDuct rdf
+        writea :: Writer a       <- withWriteDuct wda
+        writeb :: Writer b       <- withWriteDuct wdb
+        let recur :: RecurM Void
             recur = do
-                f <- readM rf
-                _ <- bitraverse
-                        (writeM wa)
-                        (writeM wb)
-                        f
+                f :: f a b <- readf
+                _ <- bitraverse writea writeb f
                 recur
-        runM recur
+        runRecurM recur
 
     duplicator :: forall a f .
                     Traversable f
@@ -73,26 +69,27 @@ module Data.Conduit.Parallel.Internal.Copier (
                     -> f (WriteDuct a)
                     -> Worker ()
     duplicator rda fwda = do
-        ra <- withReadDuct rda
-        fwa <- traverse withWriteDuct fwda
-        let recur :: MaybeT IO Void
+        reada   :: Reader a     <- withReadDuct rda
+        writesf :: f (Writer a) <- traverse withWriteDuct fwda
+        let recur :: RecurM Void
             recur = do
-                a <- readM ra
-                traverse_ (flip writeM a) fwa
+                a :: a <- reada
+                traverse_ ($ a) writesf
                 recur
-        runM recur
-            
+        runRecurM recur
+
     traverser :: forall f a .
                     Traversable f
                     => ReadDuct (f a)
                     -> WriteDuct a
                     -> Worker ()
     traverser rdf wda = do
-        rf <- withReadDuct rdf
-        wa <- withWriteDuct wda
-        let recur :: MaybeT IO Void
+        readfa :: Reader (f a) <- withReadDuct rdf
+        writea :: Writer a     <- withWriteDuct wda
+        let recur :: RecurM Void
             recur = do
-                f <- readM rf
-                traverse_ (writeM wa) f
+                f :: f a <- readfa
+                traverse_ writea f
                 recur
-        runM recur
+        runRecurM recur
+
