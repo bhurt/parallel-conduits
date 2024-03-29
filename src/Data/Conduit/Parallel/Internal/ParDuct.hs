@@ -11,19 +11,18 @@
 --
 -- = Warning
 --
--- This is an internal module of the Parallel Conduits library.  You almost
--- certainly want to use [Data.Conduit.Parallel](Data-Conduit-Parallel.html)
--- instead.  Anything in this module not explicitly re-exported 
--- by [Data.Conduit.Parallel](Data-Conduit-Parallel.html)
--- is for internal use only, and will change or disappear without
--- notice.  Use at your own risk.
+-- This is an internal module of the Parallel Conduits library.  You
+-- almost certainly want to use "Data.Conduit.Parallel"  instead.  
+-- Anything in this module not explicitly re-exported by
+-- "Data.Conduit.Parallel" is for internal use only, and will change
+-- or disappear without notice.  Use at your own risk.
 --
 -- = Purpose
 --
--- This module wraps the various functions in `Duct` in such a way as
--- they work with the greater ParConduit ecosystem.  This lets Ducts
--- stay their own thing, and one day possibly be spun off into their
--- own library.
+-- This module wraps the various functions in 
+-- "Data.Conduit.Parallel.Internal.Duct" in such a way as they work with
+-- the greater ParConduit ecosystem.  This lets Ducts stay their own thing,
+-- and one day possibly be spun off into their own library.
 --
 -- You should import this module rather than Duct itself.
 --
