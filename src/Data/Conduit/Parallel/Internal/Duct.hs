@@ -15,19 +15,25 @@
 --
 -- = Warning
 --
--- This is an internal module of the Parallel Conduits library.  You almost
--- certainly want to use [Data.Conduit.Parallel](Data-Conduit-Parallel.html)
--- instead.  Anything in this module not explicitly re-exported 
--- by [Data.Conduit.Parallel](Data-Conduit-Parallel.html)
--- is for internal use only, and will change or disappear without
--- notice.  Use at your own risk.
+-- This is an internal module of the Parallel Conduits library.  You
+-- almost certainly want to use "Data.Conduit.Parallel"  instead.  
+-- Anything in this module not explicitly re-exported by
+-- "Data.Conduit.Parallel" is for internal use only, and will change
+-- or disappear without notice.  Use at your own risk.
+--
+-- = Use ParDuct Instead.
+--
+-- Rather than directly using this module, use 
+-- "Data.Conduit.Parallel.Internal.ParDuct" instead.  It wraps these
+-- functions in a way more useful for Parallel Conduits code.  This
+-- module may then, one day, be spun off into it's own library.
 --
 -- = Introduction
 --
 -- This module implements Ducts (aka Closable MVars).  A duct is a one
--- element channel between two threads.  It works much like an MVar does,
--- in the reading the duct when it's empty blocks, as does writting to the
--- duct when it's full. 
+-- element channel between threads.  It works much like an MVar does,
+-- in the reading the duct when it's empty blocks, as does writting to
+-- the duct when it's full. 
 --
 -- But in addition to being full or empty, ducts can also be closed.  A
 -- closed duct does not allow any further values to be transmitted, and
@@ -693,6 +699,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                     $ setContents Empty
                 pure r
 
+    -- | Decrement the opens count of the duct.
     decrementCount :: TVar Int -> IO () -> IO ()
     decrementCount cvar doClose = do
         b <- atomically $ do
@@ -705,6 +712,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                     pure $ c2 == 0
         when b $ doClose
 
+    -- | Close the read duct.
     doCloseReadDuct :: forall a .  StatusTVar a -> IO ()
     doCloseReadDuct tvar = atomically $ do
         ms :: IsClosed (Status a) <- readTVar tvar
@@ -716,6 +724,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                 closeAll (view writers s)
                 pure ()
 
+    -- | Write a value to the write duct.
     doWriteDuct :: forall a .
                     StatusTVar a
                     -> Maybe (IO ())
@@ -763,12 +772,17 @@ module Data.Conduit.Parallel.Internal.Duct(
                                         ++ "full duct."
 
 
+    -- | Close a write duct.
     doCloseWriteDuct :: forall a . StatusTVar a -> IO ()
     doCloseWriteDuct tvar = atomically $ do
         ms :: IsClosed (Status a) <- readTVar tvar
         case ms of
             IsClosed -> pure ()
             IsOpen s -> do
+                -- Note that closing a write duct does not necessarily
+                -- close the associated read side, if there is still
+                -- a value in the duct (i.e. the next read will still
+                -- succeed).
                 case view contents s of
                     Empty -> do
                         writeTVar tvar IsClosed
@@ -781,6 +795,7 @@ module Data.Conduit.Parallel.Internal.Duct(
                         closeAll (view writers s)
 
 
+    -- | Increment the opens count.
     addOpens :: TVar Int -> Int -> IO ()
     addOpens cvar cnt
         | cnt <= 0  = error "addOpens: non-positive count!"
@@ -789,6 +804,9 @@ module Data.Conduit.Parallel.Internal.Duct(
             let !c2 = c + cnt
             writeTVar cvar c2
 
+    -- | Create a duct given a `Contents`.
+    --
+    -- This is the common code between `newDuct` and `newFullDuct`.
     makeDuct :: forall a . Contents a -> IO (Duct a)
     makeDuct cnts = do
         let makeStatus :: IsClosed (Status a)
@@ -816,12 +834,21 @@ module Data.Conduit.Parallel.Internal.Duct(
         pure (rd, wd)
 
 
+    -- | Create a new empty Duct.
     newDuct :: forall a .  IO (Duct a)
     newDuct = makeDuct Empty
 
+    -- | Create a new duct that already holds a value.
     newFullDuct :: forall a .  a -> IO (Duct a)
     newFullDuct a = makeDuct $ Full a
 
+    -- | Create a new closed duct.
+    --
+    -- Both read and write operations on the created duct will fail
+    -- immediately.  Used to create the end caps for sources and sinks
+    -- (ParConduit segments that should never read their inputs (sources)
+    -- or write to their outputs (sinks)).
+    --
     newClosedDuct :: forall a . Duct a
     newClosedDuct = (rd, wd)
         where
@@ -836,16 +863,39 @@ module Data.Conduit.Parallel.Internal.Duct(
                     writeDuct = \_ -> const (pure Closed),
                     closeWriteDuct = pure () }
 
+    -- | Contramap a write duct with a function that executes in IO.
+    --
+    -- Note that the computation is performed in whatever thread
+    -- is writing to the write duct.  As such, this is not exported
+    -- to the wider world.  It mainly exists so we can force
+    -- the values being written to head normal form with a combination
+    -- of `Control.Exception.evaluate` and `Control.DeepSeq.force`.
     contramapIO :: forall a b .
                     (a -> IO b)
                     -> WriteDuct b
                     -> WriteDuct a
     contramapIO f wd = wd { writeDuct = \mr -> f >=> writeDuct wd mr }
 
+    -- | Allow reading from a ReadDuct.
+    --
+    -- Converts a ReadDuct into a function that reads values from that
+    -- read duct.  This function uses the standard Haskell with*
+    -- pattern for wrapping `Control.Exception.bracket`.  When the
+    -- wrapped computation exits (either via normal value return or
+    -- due to an exception), the open count of the read duct is
+    -- decremented.  If it drops to zero, then the read is closed.
+    -- 
+    -- This function is designed to work with the ContT transformer.
+    --
+    -- This function takes an extra IO action, which is performed if
+    -- and when the function blocks.  This is used for testing-
+    -- normally it is Nothing.
+    --
     withReadDuct :: forall a b m .
                         MonadUnliftIO m
                         => ReadDuct a
-                        -> Maybe (IO ())
+                        -> Maybe (IO ()) -- ^ The IO operation to perform
+                                         -- on blocking (used for testing).
                         -> (IO (Maybe a) -> m b)
                         -> m b
     withReadDuct rd mio act =
@@ -853,10 +903,26 @@ module Data.Conduit.Parallel.Internal.Duct(
             (act (readDuct rd mio))
             (liftIO (closeReadDuct rd))
 
+    -- | Allow writing to a WriteDuct.
+    --
+    -- Converts a WriteDuct into a function that writes values to that
+    -- write duct.  This function uses the standard Haskell with*
+    -- pattern for wrapping `Control.Exception.bracket`.  When the
+    -- wrapped computation exits (either via normal value return or
+    -- due to an exception), the open count of the write duct is
+    -- decremented.  If it drops to zero, then the duct is closed.
+    -- 
+    -- This function is designed to work with the ContT transformer.
+    --
+    -- This function takes an extra IO action, which is performed if
+    -- and when the function blocks.  This is used for testing-
+    -- normally it is Nothing.
+    --
     withWriteDuct :: forall a b m .
                         MonadUnliftIO m
                         => WriteDuct a
-                        -> Maybe (IO ())
+                        -> Maybe (IO ()) -- ^ The IO operation to perform
+                                         -- on blocking (used for testing).
                         -> ((a -> IO Open) -> m b)
                         -> m b
     withWriteDuct wd mio act =
@@ -865,12 +931,33 @@ module Data.Conduit.Parallel.Internal.Duct(
             (liftIO (closeWriteDuct wd))
 
     -- | Add opens to a read duct.
+    --
+    -- Read ducts have an open count associated with them.  When multiple
+    -- threads are expected to share a read duct (for example, in
+    -- `Data.Conduit.Parallel.Internal.Parallel.parallel`), you can add
+    -- to the count of opens expected. This way, the last open to exit
+    -- closes the read duct, not the first.
+    --
+    -- Note that read ducts start with an open count of 1.  So, if you
+    -- are going to have N threads use the read duct, you need to
+    -- add N-1 extra opens.
+    --
     addReadOpens :: forall a . ReadDuct a -> Int -> IO ()
     addReadOpens rd n
         | n <= 0    = error "addReadOpens: non-positive count!"
         | otherwise = readAddOpens rd n
 
     -- | Add opens to a write duct.
+    --
+    -- Write ducts have an open count associated with them.  When multiple
+    -- threads are expected to share a write duct (for example, in
+    -- `Data.Conduit.parallel`), you can add to the count of opens expected.
+    -- This way, the last open to exit closes the write duct, not the first.
+    --
+    -- Note that write ducts start with an open count of 1.  So, if you
+    -- are going to have N threads use the write duct, you need to
+    -- add N-1 extra opens.
+    --
     addWriteOpens :: forall a . WriteDuct a -> Int -> IO ()
     addWriteOpens wd n
         | n <= 0    = error "addWriteOpens: non-positive count!"
