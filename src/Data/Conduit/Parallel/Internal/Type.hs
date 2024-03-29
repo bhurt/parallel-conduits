@@ -12,12 +12,11 @@
 --
 -- = Warning
 --
--- This is an internal module of the Parallel Conduits library.  You almost
--- certainly want to use [Data.Conduit.Parallel](Data-Conduit-Parallel.html)
--- instead.  Anything in this module not explicitly re-exported 
--- by [Data.Conduit.Parallel](Data-Conduit-Parallel.html)
--- is for internal use only, and will change or disappear without
--- notice.  Use at your own risk.
+-- This is an internal module of the Parallel Conduits library.  You
+-- almost certainly want to use "Data.Conduit.Parallel"  instead.  
+-- Anything in this module not explicitly re-exported by
+-- "Data.Conduit.Parallel" is for internal use only, and will change
+-- or disappear without notice.  Use at your own risk.
 --
 module Data.Conduit.Parallel.Internal.Type (
     ParConduit(..),
