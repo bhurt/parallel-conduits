@@ -29,10 +29,32 @@ module Data.Conduit.Parallel.Internal.Spawn (
     import           Control.Monad.IO.Unlift
     import qualified UnliftIO.Async           as Async
 
+    -- | The main control thread type.
+    --
+    -- There is one control thread, which only creates ducts and spawns
+    -- worker and client threads.  All real work should be done in either
+    -- a worker or client thread.  The control thread is executed by
+    -- calling `Data.Conduit.Parallel.Internal.Run.runParConduit`.
     type Control r m a = ContT r m a
 
+    -- | The worker thread type.
+    --
+    -- Worker threads are spawned by the control thread to do internal
+    -- work- generally getting values from read ducts and writing them
+    -- to write ducts.  As they do not execute client-supplied code (use
+    -- client threads for that case), they do not need to execute in
+    -- the client-supplied monad transformer stack.  They are thus
+    -- somewhat more efficient to spawn.
     type Worker a = ContT () IO a
 
+    -- | Spawn a client thread.
+    --
+    -- A client thread executes client-supplied code, and thus executes
+    -- in the client-supplied monad.
+    --
+    -- The canonical users of this function are in
+    -- "Data.Conduit.Parallel.Internal.LiftC".
+    --
     spawnClient :: forall m r x .
                 MonadUnliftIO m
                 => m r
@@ -42,6 +64,10 @@ module Data.Conduit.Parallel.Internal.Spawn (
         lift $ Async.link asy
         pure $ Async.wait asy
 
+    -- | Spawn a worker thread.
+    --
+    -- As worker threads do not execute client-supplied code, they don't
+    -- need to execute in the client-supplied monad.
     spawnWorker :: forall m x .
                     MonadUnliftIO m
                     => Worker ()
