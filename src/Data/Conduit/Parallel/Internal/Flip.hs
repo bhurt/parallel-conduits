@@ -28,6 +28,12 @@ module Data.Conduit.Parallel.Internal.Flip (
     import           Data.Profunctor
 
 
+    -- | Flip the order of type arguments.
+    --
+    -- This newtype works on the order of type arguments to a type
+    -- the same way -- that `flip` works on the order of value
+    -- arguments to function.
+    --
     data Flip f a b = Flip { unFlip :: f b a }
 
     instance Bifunctor f => Functor (Flip f a) where
@@ -47,7 +53,8 @@ module Data.Conduit.Parallel.Internal.Flip (
 
     instance (Bifunctor f, Bifoldable f) => Bifoldable (Flip f) where
         bifold (Flip f) = getDual $ bifold (bimap Dual Dual f)
-        bifoldMap f g (Flip x) = getDual $ bifold (bimap (Dual . g) (Dual . f) x)
+        bifoldMap f g (Flip x) =
+            getDual $ bifold (bimap (Dual . g) (Dual . f) x)
         bifoldr f g x = bifoldl (flip g) (flip f) x . unFlip
         bifoldl f g x = bifoldr (flip g) (flip f) x . unFlip
 
