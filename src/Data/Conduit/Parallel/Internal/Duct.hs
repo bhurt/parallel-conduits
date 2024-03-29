@@ -237,11 +237,11 @@ module Data.Conduit.Parallel.Internal.Duct(
 
     -- | Boolean-analog for whether the Duct is open or closed.
     --
-    -- Note that Ducts can be closed, which means that writeDuct can
-    -- fail if the Duct is closed.  So instead of returning ()
-    -- like putMVar does, `writeDuct` returns a Open value.  A value
-    -- of Open means the operation succeeded, a value of Closed means
-    -- it failed.
+    -- Note that Ducts can be closed, which means that the function
+    -- given out by `withWriteDuct` can fail if the Duct is closed.  So
+    -- instead of returning () like putMVar does, the function returns
+    -- a Open value.  A value of Open means the operation succeeded,
+    -- a value of Closed means it failed.
     data Open =
         Open        -- ^ The Duct is Open
         | Closed    -- ^ The Duct is Closed
@@ -323,6 +323,20 @@ module Data.Conduit.Parallel.Internal.Duct(
     instance Contravariant WriteDuct where
         contramap f wd = wd { writeDuct = \mr -> writeDuct wd mr . f }
 
+    -- | A convience type for creating a duct.
+    --
+    -- This allows us to do:
+    --
+    -- @
+    --      (rd, wd) :: Duct Int <- newDuct
+    -- @
+    --
+    -- rather than the more clunky:
+    --
+    -- @
+    --      (rd, wd) :: (ReadDuct Int, WriteDuct Int) <- newDuct
+    -- @
+    --
     type Duct a = (ReadDuct a, WriteDuct a)
 
     -- | Maybe-analog for whether an operation has completed or would block.
@@ -475,7 +489,8 @@ module Data.Conduit.Parallel.Internal.Duct(
     -- | Awake the head waiter in the given queue.
     --
     -- If there are no non-abandoned waiters in the queue (i.e.
-    -- `getQueueHead` returns Nothing), then no waiter is woken up.
+    -- getQueueHead returns Nothing), then no waiter is woken up.
+    --
     awaken :: forall a .  SLens a (Seq Waiter) -> StatusM a ()
     awaken q = do
         r <- getQueueHead q
@@ -518,7 +533,7 @@ module Data.Conduit.Parallel.Internal.Duct(
     -- | Set up to wait on a waiter.
     --
     -- This function sets the waiter to be in state waiting,
-    -- adds the waiter to the given queue, and returns `WouldBlock`.
+    -- adds the waiter to the given queue, and returns WouldBlock.
     block :: forall a x .
                 SLens a (Seq Waiter)
                 -> Waiter
@@ -557,10 +572,10 @@ module Data.Conduit.Parallel.Internal.Duct(
     --
     -- Both the read and write functions have the same basic structure-
     -- we have a pre-block transaction that either returns without
-    -- needing to block (when it returns `Complete`), or sets up
-    -- to block (when it returns `WouldBlock`).  
+    -- needing to block (when it returns Complete), or sets up
+    -- to block (when it returns WouldBlock).  
     --
-    -- If the pre-block transaction returns `WouldBlock`, we then start
+    -- If the pre-block transaction returns WouldBlock, we then start
     -- a second transaction.  This second transaction blocks on the
     -- waiter until it's the head of the queue, and then updates the
     -- duct and returns the correct value.
@@ -804,7 +819,7 @@ module Data.Conduit.Parallel.Internal.Duct(
             let !c2 = c + cnt
             writeTVar cvar c2
 
-    -- | Create a duct given a `Contents`.
+    -- | Create a duct given a Contents.
     --
     -- This is the common code between `newDuct` and `newFullDuct`.
     makeDuct :: forall a . Contents a -> IO (Duct a)
