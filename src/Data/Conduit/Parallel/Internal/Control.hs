@@ -32,6 +32,7 @@ module Data.Conduit.Parallel.Internal.Control(
 
     -- * Spawning Threads
     spawnClient,
+    spawnWorker,
 
     -- * Ducts
     Duct.ReadDuct,
@@ -46,6 +47,7 @@ module Data.Conduit.Parallel.Internal.Control(
 
 ) where
 
+    import qualified Control.Concurrent.Async               as AsyncIO
     import           Control.Monad.Cont
     import           Control.Monad.IO.Unlift
     import qualified Data.Conduit.Parallel.Internal.Duct   as Duct
@@ -75,6 +77,31 @@ module Data.Conduit.Parallel.Internal.Control(
         asy <- ContT $ Async.withAsync client
         lift $ Async.link asy
         pure $ Async.wait asy
+
+    -- | Spawn a worker thread.
+    --
+    -- As worker threads do not execute client-supplied code, they don't
+    -- need to execute in the client-supplied monad.
+    --
+    -- By not explicitly using the Worker type from
+    -- "Data.Conduit.Parallel.Internal.Worker", we avoid a circular
+    -- dependency, and this function can then live where it really
+    -- belongs.
+    spawnWorker :: forall m x .
+                    MonadUnliftIO m
+                    => ContT () IO ()
+                    -- ^ The worker thread.
+                    -> Control x m (m ())
+    spawnWorker worker = do
+            asy <- ContT $ go1
+            lift $ Async.link asy
+            pure $ Async.wait asy
+        where
+            go1 :: (Async.Async () -> m x) -> m x
+            go1 f = withRunInIO $ \run -> AsyncIO.withAsync task (run . f)
+
+            task :: IO ()
+            task = runContT worker pure
 
     -- | Create a new empty Duct.
     newDuct :: forall a m x . MonadIO m => Control x m (Duct.Duct a)

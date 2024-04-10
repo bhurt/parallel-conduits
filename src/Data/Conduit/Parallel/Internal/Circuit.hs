@@ -26,7 +26,6 @@ module Data.Conduit.Parallel.Internal.Circuit (
     import           Data.Conduit.Parallel.Internal.Control
     import           Data.Conduit.Parallel.Internal.Copier
     import           Data.Conduit.Parallel.Internal.Type
-    import           Data.Conduit.Parallel.Internal.Worker
     import           UnliftIO
 
     -- | Split the input into two different ParConduits.

@@ -27,7 +27,6 @@ module Data.Conduit.Parallel.Internal.Tee (
     import           Data.Conduit.Parallel.Internal.Control
     import           Data.Conduit.Parallel.Internal.Copier
     import           Data.Conduit.Parallel.Internal.Type
-    import           Data.Conduit.Parallel.Internal.Worker
     import           Data.List.NonEmpty                     (NonEmpty (..))
     import qualified Data.List.NonEmpty                     as NE
     import           Data.Void
