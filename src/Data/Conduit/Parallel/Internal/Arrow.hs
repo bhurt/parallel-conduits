@@ -37,7 +37,6 @@ module Data.Conduit.Parallel.Internal.Arrow (
     import           Data.Conduit.Parallel.Internal.Copier  (copier)
     import           Data.Conduit.Parallel.Internal.Flip
     import           Data.Conduit.Parallel.Internal.LiftC
-    import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
     import           Data.Conduit.Parallel.Internal.Worker
     import qualified Data.Functor.Contravariant             as Contra

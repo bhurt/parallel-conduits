@@ -27,6 +27,13 @@
 -- control thread.
 --
 module Data.Conduit.Parallel.Internal.Control(
+    -- * Control Thread Type
+    Control,
+
+    -- * Spawning Threads
+    spawnClient,
+
+    -- * Ducts
     Duct.ReadDuct,
     Duct.WriteDuct,
     Duct.Duct,
@@ -36,11 +43,38 @@ module Data.Conduit.Parallel.Internal.Control(
     addReadOpens,
     addWriteOpens,
     Duct.contramapIO
+
 ) where
 
     import           Control.Monad.Cont
-    import qualified Data.Conduit.Parallel.Internal.Duct  as Duct
-    import           Data.Conduit.Parallel.Internal.Spawn
+    import           Control.Monad.IO.Unlift
+    import qualified Data.Conduit.Parallel.Internal.Duct   as Duct
+    import qualified UnliftIO.Async                        as Async
+
+    -- | The main control thread type.
+    --
+    -- There is one control thread, which only creates ducts and spawns
+    -- worker and client threads.  All real work should be done in either
+    -- a worker or client thread.  The control thread is executed by
+    -- calling `Data.Conduit.Parallel.Internal.Run.runParConduit`.
+    type Control r m a = ContT r m a
+
+    -- | Spawn a client thread.
+    --
+    -- A client thread executes client-supplied code, and thus executes
+    -- in the client-supplied monad.
+    --
+    -- The canonical users of this function are in
+    -- "Data.Conduit.Parallel.Internal.LiftC".
+    --
+    spawnClient :: forall m r x .
+                MonadUnliftIO m
+                => m r
+                -> Control x m (m r)
+    spawnClient client = do
+        asy <- ContT $ Async.withAsync client
+        lift $ Async.link asy
+        pure $ Async.wait asy
 
     -- | Create a new empty Duct.
     newDuct :: forall a m x . MonadIO m => Control x m (Duct.Duct a)

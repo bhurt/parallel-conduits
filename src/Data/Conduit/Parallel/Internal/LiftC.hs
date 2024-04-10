@@ -23,15 +23,15 @@ module Data.Conduit.Parallel.Internal.LiftC (
 ) where
 
     import           Control.DeepSeq
-    import           Control.Exception                    (evaluate)
+    import           Control.Exception                      (evaluate)
     import           Control.Monad.IO.Class
-    import           Control.Monad.IO.Unlift              (MonadUnliftIO)
-    import           Data.Conduit                         ((.|))
-    import qualified Data.Conduit                         as C
-    import qualified Data.Conduit.Parallel.Internal.Duct  as Duct
-    import           Data.Conduit.Parallel.Internal.Spawn
-    import           Data.Conduit.Parallel.Internal.Type  (ParConduit (..))
-    import           Data.Void                            (Void)
+    import           Control.Monad.IO.Unlift                (MonadUnliftIO)
+    import           Data.Conduit                           ((.|))
+    import qualified Data.Conduit                           as C
+    import           Data.Conduit.Parallel.Internal.Control
+    import qualified Data.Conduit.Parallel.Internal.Duct    as Duct
+    import           Data.Conduit.Parallel.Internal.Type    (ParConduit (..))
+    import           Data.Void                              (Void)
 
     liftC :: forall m r i o .
                 MonadUnliftIO m

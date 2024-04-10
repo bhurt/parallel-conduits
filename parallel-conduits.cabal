@@ -45,7 +45,6 @@ library
                         , Data.Conduit.Parallel.Internal.Parallel
                         , Data.Conduit.Parallel.Internal.ParallelA
                         , Data.Conduit.Parallel.Internal.Run
-                        , Data.Conduit.Parallel.Internal.Spawn
                         , Data.Conduit.Parallel.Internal.Tee
                         , Data.Conduit.Parallel.Internal.Type
                         , Data.Conduit.Parallel.Internal.Worker

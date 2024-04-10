@@ -21,7 +21,6 @@ module Data.Conduit.Parallel.Internal.Parallel (
 ) where
 
     import           Data.Conduit.Parallel.Internal.Control
-    import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
     import           UnliftIO
 

@@ -28,6 +28,14 @@
 -- threads.
 --
 module Data.Conduit.Parallel.Internal.Worker(
+    -- * Worker Thread Type
+    --
+    Worker,
+
+    -- * Spawning Worker Threads
+    --
+    spawnWorker,
+
     -- * Worker Loops
     --
     LoopM,
@@ -58,16 +66,48 @@ module Data.Conduit.Parallel.Internal.Worker(
 
 ) where
 
-
+    import qualified Control.Concurrent.Async               as AsyncIO
     import           Control.Concurrent.STM
-    import qualified Control.Exception                    as Ex
+    import qualified Control.Exception                      as Ex
     import           Control.Monad.Cont
+    import           Control.Monad.IO.Unlift
     import           Control.Monad.Trans.Maybe
-    import qualified Data.Conduit.Parallel.Internal.Duct  as Duct
-    import           Data.Conduit.Parallel.Internal.Spawn
-    import           Data.Sequence                        (Seq)
-    import qualified Data.Sequence                        as Seq
+    import           Data.Conduit.Parallel.Internal.Control
+    import qualified Data.Conduit.Parallel.Internal.Duct    as Duct
+    import           Data.Sequence                          (Seq)
+    import qualified Data.Sequence                          as Seq
     import           Data.Void
+    import qualified UnliftIO.Async                         as Async
+
+
+    -- | The worker thread type.
+    --
+    -- Worker threads are spawned by the control thread to do internal
+    -- work- generally getting values from read ducts and writing them
+    -- to write ducts.  As they do not execute client-supplied code (use
+    -- client threads for that case), they do not need to execute in
+    -- the client-supplied monad transformer stack.  They are thus
+    -- somewhat more efficient to spawn.
+    type Worker a = ContT () IO a
+
+    -- | Spawn a worker thread.
+    --
+    -- As worker threads do not execute client-supplied code, they don't
+    -- need to execute in the client-supplied monad.
+    spawnWorker :: forall m x .
+                    MonadUnliftIO m
+                    => Worker ()
+                    -> Control x m (m ())
+    spawnWorker worker = do
+            asy <- ContT $ go1
+            lift $ Async.link asy
+            pure $ Async.wait asy
+        where
+            go1 :: (Async.Async () -> m x) -> m x
+            go1 f = withRunInIO $ \run -> AsyncIO.withAsync task (run . f)
+
+            task :: IO ()
+            task = runContT worker pure
 
     -- | Worker loop type.
     --
