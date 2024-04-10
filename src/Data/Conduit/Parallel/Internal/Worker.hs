@@ -30,8 +30,8 @@
 module Data.Conduit.Parallel.Internal.Worker(
     -- * Worker Loops
     --
-    RecurM,
-    runRecurM,
+    LoopM,
+    runLoopM,
 
     -- * Ducts
     --
@@ -71,14 +71,14 @@ module Data.Conduit.Parallel.Internal.Worker(
 
     -- | Worker loop type.
     --
-    type RecurM a = MaybeT IO a
+    type LoopM a = MaybeT IO a
 
-    type Reader a = RecurM a
+    type Reader a = LoopM a
 
-    type Writer a = a -> RecurM ()
+    type Writer a = a -> LoopM ()
 
-    runRecurM :: RecurM Void -> Worker ()
-    runRecurM act = lift $ do
+    runLoopM :: LoopM Void -> Worker ()
+    runLoopM act = lift $ do
         r :: Maybe Void <- runMaybeT act
         case r of
             Nothing -> pure ()
@@ -117,7 +117,7 @@ module Data.Conduit.Parallel.Internal.Worker(
     withWriteDuct :: forall a . Duct.WriteDuct a -> Worker (Writer a)
     withWriteDuct wd = do
         wio :: (a -> IO Duct.Open) <- ContT $ Duct.withWriteDuct wd Nothing
-        let wm :: a -> RecurM ()
+        let wm :: a -> LoopM ()
             wm a = MaybeT $ do
                 open <- wio a
                 case open of

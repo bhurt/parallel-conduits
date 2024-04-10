@@ -44,23 +44,23 @@ module Data.Conduit.Parallel.Internal.Cache (
             loader que = do
                 readi  :: Reader i <- withReadDuct rd
                 writeq :: Writer i <- withWriteBQueue que
-                let recur :: RecurM Void
+                let recur :: LoopM Void
                     recur = do
                         i <- readi
                         writeq i
                         recur
-                runRecurM recur
+                runLoopM recur
 
             unloader :: BQueue i -> Worker ()
             unloader que = do
                 readq  :: Reader i <- withReadBQueue que
                 writei :: Writer i <- withWriteDuct wd
-                let recur :: RecurM Void
+                let recur :: LoopM Void
                     recur = do
                         i <- readq
                         writei i
                         recur
-                runRecurM recur
+                runLoopM recur
 
     -- | Create a caching ParConduit.
     --

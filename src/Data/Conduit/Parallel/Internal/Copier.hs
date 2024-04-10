@@ -37,12 +37,12 @@ module Data.Conduit.Parallel.Internal.Copier (
     copier src snk = do
         reada :: Reader a <- withReadDuct src
         writea :: Writer a <- withWriteDuct snk
-        let recur :: RecurM Void
+        let recur :: LoopM Void
             recur = do
                 a <- reada
                 writea a
                 recur
-        runRecurM recur
+        runLoopM recur
 
     direct :: forall a b f .
                 Bitraversable f
@@ -54,12 +54,12 @@ module Data.Conduit.Parallel.Internal.Copier (
         readf  :: Reader (f a b) <- withReadDuct rdf
         writea :: Writer a       <- withWriteDuct wda
         writeb :: Writer b       <- withWriteDuct wdb
-        let recur :: RecurM Void
+        let recur :: LoopM Void
             recur = do
                 f :: f a b <- readf
                 _ <- bitraverse writea writeb f
                 recur
-        runRecurM recur
+        runLoopM recur
 
     duplicator :: forall a f .
                     Traversable f
@@ -69,12 +69,12 @@ module Data.Conduit.Parallel.Internal.Copier (
     duplicator rda fwda = do
         reada   :: Reader a     <- withReadDuct rda
         writesf :: f (Writer a) <- traverse withWriteDuct fwda
-        let recur :: RecurM Void
+        let recur :: LoopM Void
             recur = do
                 a :: a <- reada
                 traverse_ ($ a) writesf
                 recur
-        runRecurM recur
+        runLoopM recur
 
     traverser :: forall f a .
                     Traversable f
@@ -84,10 +84,10 @@ module Data.Conduit.Parallel.Internal.Copier (
     traverser rdf wda = do
         readfa :: Reader (f a) <- withReadDuct rdf
         writea :: Writer a     <- withWriteDuct wda
-        let recur :: RecurM Void
+        let recur :: LoopM Void
             recur = do
                 f :: f a <- readfa
                 traverse_ writea f
                 recur
-        runRecurM recur
+        runLoopM recur
 

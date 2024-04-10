@@ -78,7 +78,7 @@ module Data.Conduit.Parallel.Internal.ParallelA (
             splitter rdi wdis = do
                 readi :: Reader i            <- withReadDuct rdi
                 wis   :: NonEmpty (Writer i) <- traverse withWriteDuct wdis
-                let recur :: NonEmpty (Writer i) -> RecurM Void
+                let recur :: NonEmpty (Writer i) -> LoopM Void
                     recur ws = do
                         i <- readi
                         let (wi, ws') = case ws of
@@ -86,13 +86,13 @@ module Data.Conduit.Parallel.Internal.ParallelA (
                                             y :| (x:xs) -> (y, (x :| xs))
                         wi i
                         recur ws'
-                runRecurM $ recur wis
+                runLoopM $ recur wis
 
             fuser :: WriteDuct o -> NonEmpty (ReadDuct o) -> Worker ()
             fuser wdo rdos = do
                 ros :: NonEmpty (Reader o) <- traverse withReadDuct rdos
                 wo  :: Writer o            <- withWriteDuct wdo
-                let recur :: NonEmpty (Reader o) -> RecurM Void
+                let recur :: NonEmpty (Reader o) -> LoopM Void
                     recur rs = do
                         let (ro, rs') = case rs of
                                             y :| []     -> (y, ros)
@@ -100,5 +100,5 @@ module Data.Conduit.Parallel.Internal.ParallelA (
                         o <- ro
                         wo o
                         recur rs'
-                runRecurM $ recur ros
+                runLoopM $ recur ros
 

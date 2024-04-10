@@ -88,13 +88,13 @@ module Data.Conduit.Parallel.Internal.Arrow (
                 writeq :: Writer (f ()) <- withWriteQueue que
                 readfi :: Reader (f i)  <- withReadDuct rdfi
                 writei :: Writer i      <- withWriteDuct wdi
-                let recur :: RecurM Void
+                let recur :: LoopM Void
                     recur = do
                         fi :: f i <- readfi
                         fu :: f () <- traverse writei fi
                         writeq fu
                         recur
-                runRecurM recur
+                runLoopM recur
 
             fuser :: Queue (f ())
                         -> ReadDuct o
@@ -104,13 +104,13 @@ module Data.Conduit.Parallel.Internal.Arrow (
                 readq   :: Reader (f ()) <- withReadQueue que
                 reado   :: Reader o      <- withReadDuct rdo
                 writefo :: Writer (f o)  <- withWriteDuct wdfo
-                let recur :: RecurM Void
+                let recur :: LoopM Void
                     recur = do
                         fu :: f () <- readq
                         fo :: f o <- traverse (\() -> reado) fu
                         writefo fo
                         recur
-                runRecurM recur
+                runLoopM recur
 
     -- | Route a bitraversable structure to either of two inner ParArrows.
     --
@@ -150,13 +150,13 @@ module Data.Conduit.Parallel.Internal.Arrow (
                 readfi  :: Reader (f i1 i2) <- withReadDuct rdfi
                 writei1 :: Writer i1        <- withWriteDuct wdi1
                 writei2 :: Writer i2        <- withWriteDuct wdi2
-                let recur :: RecurM Void
+                let recur :: LoopM Void
                     recur = do
                         fi :: f i1 i2 <- readfi
                         fu :: f () () <- bitraverse writei1 writei2 fi
                         writeq fu
                         recur
-                runRecurM recur
+                runLoopM recur
 
             fuser :: Queue (f () ())
                         -> ReadDuct o1
@@ -168,7 +168,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
                 reado1  :: Reader o1        <- withReadDuct rdo1
                 reado2  :: Reader o2        <- withReadDuct rdo2
                 writefo :: Writer (f o1 o2) <- withWriteDuct wdfo
-                let recur :: RecurM Void
+                let recur :: LoopM Void
                     recur = do
                         fu :: f () () <- readq
                         fo :: f o1 o2 <- bitraverse
@@ -177,7 +177,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
                                             fu
                         writefo fo
                         recur
-                runRecurM recur
+                runLoopM recur
 
     -- | Lift a Kleisli arrow into a ParArrow.
     --
@@ -319,13 +319,13 @@ module Data.Conduit.Parallel.Internal.Arrow (
                     writeq :: Writer i <- withWriteQueue quei
                     readi  :: Reader i <- withReadDuct rdi
                     writei :: Writer i <- withWriteDuct wdi
-                    let recur :: RecurM Void
+                    let recur :: LoopM Void
                         recur = do
                             i :: i <- readi
                             writei i
                             writeq i
                             recur
-                    runRecurM recur
+                    runLoopM recur
 
                 shim2 :: Queue i
                             -> ReadDuct (Either a b)
@@ -337,7 +337,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
                     writeqe :: Writer (Either a b) <- withWriteQueue quee
                     reade   :: Reader (Either a b) <- withReadDuct rde
                     writei  :: Writer i            <- withWriteDuct wdi
-                    let recur :: RecurM Void
+                    let recur :: LoopM Void
                         recur = do
                             e :: Either a b <- reade
                             i :: i <- readqi
@@ -346,7 +346,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
                                 Right _ -> pure ()
                             writeqe e
                             recur
-                    runRecurM recur
+                    runLoopM recur
 
                 shim3 :: ReadDuct (a -> b)
                             -> Queue (Either a b)
@@ -356,7 +356,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
                     readqe :: Reader (Either a b) <- withReadQueue quee
                     readf  :: Reader (a -> b)     <- withReadDuct rdf
                     writeb :: Writer b            <- withWriteDuct wdb
-                    let recur :: RecurM Void
+                    let recur :: LoopM Void
                         recur = do
                             e :: Either a b <- readqe
                             b :: b <-
@@ -367,7 +367,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
                                     Right b -> pure b
                             writeb b
                             recur
-                    runRecurM recur
+                    runLoopM recur
 
     instance MonadUnliftIO m => ArrowLoop (ParArrow m) where
         loop :: forall b c d .
@@ -396,7 +396,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
                     writeq  :: Writer (IORef (Maybe d)) <- withWriteQueue que
                     readb   :: Reader b                 <- withReadDuct rdb
                     writebd :: Writer (b, d)            <- withWriteDuct wdbd
-                    let recur :: RecurM Void
+                    let recur :: LoopM Void
                         recur = do
                             b :: b <- readb
                             ref :: IORef (Maybe d)
@@ -404,7 +404,7 @@ module Data.Conduit.Parallel.Internal.Arrow (
                             writeq ref
                             writebd (b, getRef ref)
                             recur
-                    runRecurM recur
+                    runLoopM recur
 
                 getRef :: IORef (Maybe d) -> d
                 getRef ref =
@@ -424,14 +424,14 @@ module Data.Conduit.Parallel.Internal.Arrow (
                     readq  :: Reader (IORef (Maybe d)) <- withReadQueue que
                     readcd :: Reader (c, d)            <- withReadDuct rdcd
                     writec :: Writer c                 <- withWriteDuct wdc
-                    let recur :: RecurM Void
+                    let recur :: LoopM Void
                         recur = do
                             ref :: IORef (Maybe d) <- readq
                             (c, d) :: (c, d) <- readcd
                             liftIO $ writeIORef ref (Just d)
                             writec c
                             recur
-                    runRecurM recur
+                    runLoopM recur
 
     -- | Convert a ParArrow to a ParConduit
     --
