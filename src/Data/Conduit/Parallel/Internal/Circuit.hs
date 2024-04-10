@@ -24,9 +24,11 @@ module Data.Conduit.Parallel.Internal.Circuit (
 
     import           Data.Bitraversable
     import           Data.Conduit.Parallel.Internal.Control
-    import           Data.Conduit.Parallel.Internal.Copier
     import           Data.Conduit.Parallel.Internal.Type
+    import           Data.Conduit.Parallel.Internal.Worker
+    import           Data.Foldable                          (traverse_)
     import           UnliftIO
+
 
     -- | Split the input into two different ParConduits.
     --
@@ -93,4 +95,19 @@ module Data.Conduit.Parallel.Internal.Circuit (
                     -> WriteDuct a
                     -> Control x m (m ())
             go rdf wda = spawnWorker $ traverser rdf wda
+
+    traverser :: forall f a .
+                    Traversable f
+                    => ReadDuct (f a)
+                    -> WriteDuct a
+                    -> Worker ()
+    traverser rdf wda = do
+        readfa :: Reader (f a) <- openReadDuct rdf
+        writea :: Writer a     <- openWriteDuct wda
+        let recur :: LoopM Void
+            recur = do
+                f :: f a <- readfa
+                traverse_ writea f
+                recur
+        runLoopM recur
 

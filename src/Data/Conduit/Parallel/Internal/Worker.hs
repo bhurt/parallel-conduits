@@ -60,6 +60,10 @@ module Data.Conduit.Parallel.Internal.Worker(
     openReadBQueue,
     openWriteBQueue,
 
+    -- * Common Worker Threads
+    copier,
+    direct,
+
     -- * Convience
     Void
 ) where
@@ -68,11 +72,14 @@ module Data.Conduit.Parallel.Internal.Worker(
     import qualified Control.Exception                      as Ex
     import           Control.Monad.Cont
     import           Control.Monad.Trans.Maybe
+    import           Data.Bitraversable
     import           Data.Conduit.Parallel.Internal.Control
     import qualified Data.Conduit.Parallel.Internal.Duct    as Duct
     import           Data.Sequence                          (Seq)
     import qualified Data.Sequence                          as Seq
     import           Data.Void
+
+
 
 
     -- | The worker thread type.
@@ -289,4 +296,37 @@ module Data.Conduit.Parallel.Internal.Worker(
         pure $ makeCacheWriter
                 (\s -> Seq.length s < maxLen bque)
                 (getBCache bque)
+
+    copier :: forall a .
+                ReadDuct a
+                -> WriteDuct a
+                -> Worker ()
+    copier src snk = do
+        reada :: Reader a <- openReadDuct src
+        writea :: Writer a <- openWriteDuct snk
+        let recur :: LoopM Void
+            recur = do
+                a <- reada
+                writea a
+                recur
+        runLoopM recur
+
+    direct :: forall a b f .
+                Bitraversable f
+                => ReadDuct (f a b)
+                -> WriteDuct a
+                -> WriteDuct b
+                -> Worker ()
+    direct rdf wda wdb = do
+        readf  :: Reader (f a b) <- openReadDuct rdf
+        writea :: Writer a       <- openWriteDuct wda
+        writeb :: Writer b       <- openWriteDuct wdb
+        let recur :: LoopM Void
+            recur = do
+                f :: f a b <- readf
+                _ <- bitraverse writea writeb f
+                recur
+        runLoopM recur
+
+
 

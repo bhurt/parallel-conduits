@@ -25,11 +25,11 @@ module Data.Conduit.Parallel.Internal.Tee (
 
     import           Control.Applicative                    (liftA2)
     import           Data.Conduit.Parallel.Internal.Control
-    import           Data.Conduit.Parallel.Internal.Copier
     import           Data.Conduit.Parallel.Internal.Type
+    import           Data.Conduit.Parallel.Internal.Worker
+    import           Data.Foldable                          (traverse_)
     import           Data.List.NonEmpty                     (NonEmpty (..))
     import qualified Data.List.NonEmpty                     as NE
-    import           Data.Void
     import           UnliftIO
 
     -- | Copy values into multiple sinks.
@@ -147,4 +147,19 @@ module Data.Conduit.Parallel.Internal.Tee (
                     (crd, _) = newClosedDuct
                 mr :: m r <- getParConduit source crd wd
                 pure $ mu >> mr
+
+    duplicator :: forall a f .
+                    Traversable f
+                    => ReadDuct a
+                    -> f (WriteDuct a)
+                    -> Worker ()
+    duplicator rda fwda = do
+        reada   :: Reader a     <- openReadDuct rda
+        writesf :: f (Writer a) <- traverse openWriteDuct fwda
+        let recur :: LoopM Void
+            recur = do
+                a :: a <- reada
+                traverse_ ($ a) writesf
+                recur
+        runLoopM recur
 

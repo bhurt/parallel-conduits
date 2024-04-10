@@ -38,7 +38,6 @@ library
                         , Data.Conduit.Parallel.Internal.Cache
                         , Data.Conduit.Parallel.Internal.Circuit
                         , Data.Conduit.Parallel.Internal.Control
-                        , Data.Conduit.Parallel.Internal.Copier
                         , Data.Conduit.Parallel.Internal.Duct
                         , Data.Conduit.Parallel.Internal.Flip
                         , Data.Conduit.Parallel.Internal.LiftC

@@ -34,7 +34,6 @@ module Data.Conduit.Parallel.Internal.Arrow (
     import           Control.Selective
     import           Data.Bitraversable
     import           Data.Conduit.Parallel.Internal.Control
-    import           Data.Conduit.Parallel.Internal.Copier  (copier)
     import           Data.Conduit.Parallel.Internal.Flip
     import           Data.Conduit.Parallel.Internal.LiftC
     import           Data.Conduit.Parallel.Internal.Type
