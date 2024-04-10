@@ -65,7 +65,6 @@ module Data.Conduit.Parallel (
     import           Data.Conduit.Parallel.Internal.Flip
     import           Data.Conduit.Parallel.Internal.LiftC
     import           Data.Conduit.Parallel.Internal.Parallel
-    import           Data.Conduit.Parallel.Internal.ParallelA
     import           Data.Conduit.Parallel.Internal.Type
     import           Data.Conduit.Parallel.Internal.Tee
 
