@@ -297,6 +297,11 @@ module Data.Conduit.Parallel.Internal.Worker(
                 (\s -> Seq.length s < maxLen bque)
                 (getBCache bque)
 
+    -- | The common copier worker thread.
+    --
+    -- This worker thread just copies values from a single ReadDuct
+    -- into a single WriteDuct.
+    --
     copier :: forall a .
                 ReadDuct a
                 -> WriteDuct a
@@ -311,6 +316,17 @@ module Data.Conduit.Parallel.Internal.Worker(
                 recur
         runLoopM recur
 
+    -- | Common Worker thread to split bitraversable values.
+    --
+    -- This worker thread reads bitraversable values from a read duct,
+    -- and traverse over them writing their parts to the appropriate
+    -- write ducts.
+    --
+    -- Note that we use the Bitraversable type class here to support
+    -- both Either and tuple (,) values, as well as types not directly
+    -- referenced by this library, like
+    -- [These](https://hackage.haskell.org/package/these-1.2/docs/Data-These.html).
+    --
     direct :: forall a b f .
                 Bitraversable f
                 => ReadDuct (f a b)
