@@ -16,6 +16,16 @@
 -- "Data.Conduit.Parallel" is for internal use only, and will change
 -- or disappear without notice.  Use at your own risk.
 --
+-- = Purpose
+--
+-- This is a set of utilities and wrappers useful for writing code that
+-- runs in the control thread.
+--
+-- Like the "Data.Conduit.Parallel.Internal.Worker" module, it includes
+-- wrappers for the "Data.Conduit.Parallel.Internal.Duct" module,
+-- specifically wrappers for the Duct functions called from the main
+-- control thread.
+--
 module Data.Conduit.Parallel.Internal.Control(
     Duct.ReadDuct,
     Duct.WriteDuct,

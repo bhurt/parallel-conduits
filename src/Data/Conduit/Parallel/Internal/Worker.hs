@@ -19,34 +19,43 @@
 --
 -- = Purpose
 --
--- This module includes 
--- This module wraps the various functions in 
--- "Data.Conduit.Parallel.Internal.Duct" in such a way as they work with
--- the greater ParConduit ecosystem.  This lets Ducts stay their own thing,
--- and one day possibly be spun off into their own library.
+-- This module provides various utility functions for writing Worker
+-- threads. 
 --
--- You should import this module rather than Duct itself.
+-- Like the "Data.Conduit.Parallel.Internal.Control" module, it includes
+-- wrappers for the "Data.Conduit.Parallel.Internal.Duct" module,
+-- specifically wrappers for the Duct functions called from worker
+-- threads.
 --
 module Data.Conduit.Parallel.Internal.Worker(
-    Duct.Open(..),
+    -- * Worker Loops
+    --
+    RecurM,
+    runRecurM,
+
+    -- * Ducts
+    --
     Duct.ReadDuct,
     Duct.WriteDuct,
     Duct.Duct,
     withReadDuct,
     withWriteDuct,
-    RecurM,
-    runRecurM,
     Reader,
     Writer,
+
+    -- * Unbounded Queues
+    --
     Queue,
     makeQueue,
     withReadQueue,
     withWriteQueue,
+
+    -- * Bounded Queues
     BQueue,
     makeBQueue,
     withReadBQueue,
-    withWriteBQueue,
-    finalize
+    withWriteBQueue
+
 ) where
 
 

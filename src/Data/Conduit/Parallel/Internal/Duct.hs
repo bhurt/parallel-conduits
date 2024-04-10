@@ -21,12 +21,14 @@
 -- "Data.Conduit.Parallel" is for internal use only, and will change
 -- or disappear without notice.  Use at your own risk.
 --
--- = Use ParDuct Instead.
+-- = Use "Worker" and "Control" Instead.
 --
--- Rather than directly using this module, use 
--- "Data.Conduit.Parallel.Internal.ParDuct" instead.  It wraps these
--- functions in a way more useful for Parallel Conduits code.  This
--- module may then, one day, be spun off into it's own library.
+-- Rather than directly using this module, use the
+-- "Data.Conduit.Parallel.Internal.Control" and
+-- "Data.Conduit.Parallel.Internal.Worker" modules instead instead.  
+-- Those modules wrap these functions in a way more useful for
+-- Parallel Conduits code.  This module may then, one day, be spun off
+-- into it's own library.
 --
 -- = Introduction
 --
