@@ -1,9 +1,8 @@
-{-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
--- Module      : Data.Conduit.Parallel.Internal.ParDuct
--- Description : Wrapper module to fit Ducts into the ParConduit library
+-- Module      : Data.Conduit.Parallel.Internal.Control
+-- Description : Control thread utilities.
 -- Copyright   : (c) Brian Hurt, 2024
 -- License     : BSD 3-clause
 -- Maintainer  : bhurt42@gmail.com
@@ -17,36 +16,21 @@
 -- "Data.Conduit.Parallel" is for internal use only, and will change
 -- or disappear without notice.  Use at your own risk.
 --
--- = Purpose
---
--- This module wraps the various functions in 
--- "Data.Conduit.Parallel.Internal.Duct" in such a way as they work with
--- the greater ParConduit ecosystem.  This lets Ducts stay their own thing,
--- and one day possibly be spun off into their own library.
---
--- You should import this module rather than Duct itself.
---
-module Data.Conduit.Parallel.Internal.ParDuct(
-    Duct.Open(..),
+module Data.Conduit.Parallel.Internal.Control(
     Duct.ReadDuct,
     Duct.WriteDuct,
     Duct.Duct,
     newDuct,
     newFullDuct,
     Duct.newClosedDuct,
-    withReadDuct,
-    withWriteDuct,
     addReadOpens,
     addWriteOpens,
     Duct.contramapIO
 ) where
 
-
     import           Control.Monad.Cont
-    import           Control.Monad.Trans.Maybe
     import qualified Data.Conduit.Parallel.Internal.Duct  as Duct
     import           Data.Conduit.Parallel.Internal.Spawn
-    import           Data.Conduit.Parallel.Internal.Utils
 
     -- | Create a new empty Duct.
     newDuct :: forall a m x . MonadIO m => Control x m (Duct.Duct a)
@@ -56,39 +40,6 @@ module Data.Conduit.Parallel.Internal.ParDuct(
     newFullDuct :: forall a m x . MonadIO m => a -> Control x m (Duct.Duct a)
     newFullDuct a = liftIO $ Duct.newFullDuct a
 
-    -- | Allow reading from a ReadDuct.
-    --
-    -- Converts a ReadDuct into a function that reads values from that
-    -- read duct.  This function uses the standard Haskell with*
-    -- pattern for wrapping `Control.Exception.bracket`.  When the
-    -- wrapped computation exits (either via normal value return or
-    -- due to an exception), the open count of the read duct is
-    -- decremented.  If it drops to zero, then the read is closed.
-    -- 
-    withReadDuct :: forall a .  Duct.ReadDuct a -> Worker (Reader a)
-    withReadDuct rd = do
-        r :: IO (Maybe a) <- ContT $ Duct.withReadDuct rd Nothing
-        pure $ MaybeT r
-
-    -- | Allow writing to a WriteDuct.
-    --
-    -- Converts a WriteDuct into a function that writes values to that
-    -- write duct.  This function uses the standard Haskell with*
-    -- pattern for wrapping `Control.Exception.bracket`.  When the
-    -- wrapped computation exits (either via normal value return or
-    -- due to an exception), the open count of the write duct is
-    -- decremented.  If it drops to zero, then the duct is closed.
-    -- 
-    withWriteDuct :: forall a . Duct.WriteDuct a -> Worker (Writer a)
-    withWriteDuct wd = do
-        wio :: (a -> IO Duct.Open) <- ContT $ Duct.withWriteDuct wd Nothing
-        let wm :: a -> RecurM ()
-            wm a = MaybeT $ do
-                open <- wio a
-                case open of
-                    Duct.Open   -> pure $ Just ()
-                    Duct.Closed -> pure Nothing
-        pure wm
 
     -- | Add opens to a read duct.
     --
@@ -126,3 +77,4 @@ module Data.Conduit.Parallel.Internal.ParDuct(
                         -> Int
                         -> Control x m ()
     addWriteOpens wd n = liftIO $ Duct.addWriteOpens wd n
+

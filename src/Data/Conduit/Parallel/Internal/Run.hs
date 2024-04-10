@@ -21,7 +21,7 @@ module Data.Conduit.Parallel.Internal.Run (
 ) where
 
     import qualified Control.Monad.Cont                     as Cont
-    import qualified Data.Conduit.Parallel.Internal.ParDuct as Duct
+    import qualified Data.Conduit.Parallel.Internal.Control as Duct
     import           Data.Conduit.Parallel.Internal.Type    (ParConduit (..))
     import           Data.Functor.Contravariant             (contramap)
     import           Data.Void                              (Void, absurd)

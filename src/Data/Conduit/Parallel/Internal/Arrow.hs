@@ -33,13 +33,13 @@ module Data.Conduit.Parallel.Internal.Arrow (
     import qualified Control.Exception                      as Ex
     import           Control.Selective
     import           Data.Bitraversable
+    import           Data.Conduit.Parallel.Internal.Control
     import           Data.Conduit.Parallel.Internal.Copier  (copier)
     import           Data.Conduit.Parallel.Internal.Flip
     import           Data.Conduit.Parallel.Internal.LiftC
-    import           Data.Conduit.Parallel.Internal.ParDuct
     import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
-    import           Data.Conduit.Parallel.Internal.Utils
+    import           Data.Conduit.Parallel.Internal.Worker
     import qualified Data.Functor.Contravariant             as Contra
     import qualified Data.Profunctor                        as Pro
     import           Data.Void

@@ -25,10 +25,9 @@ module Data.Conduit.Parallel.Internal.Copier (
 ) where
 
     import           Data.Bitraversable
-    import           Data.Conduit.Parallel.Internal.ParDuct
     import           Data.Conduit.Parallel.Internal.Spawn
-    import           Data.Conduit.Parallel.Internal.Utils
-    import           Data.Foldable                          (traverse_)
+    import           Data.Conduit.Parallel.Internal.Worker
+    import           Data.Foldable                         (traverse_)
     import           Data.Void
 
     copier :: forall a .

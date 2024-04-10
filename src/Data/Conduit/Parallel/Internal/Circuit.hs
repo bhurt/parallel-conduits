@@ -23,8 +23,8 @@ module Data.Conduit.Parallel.Internal.Circuit (
 ) where
 
     import           Data.Bitraversable
+    import           Data.Conduit.Parallel.Internal.Control
     import           Data.Conduit.Parallel.Internal.Copier
-    import           Data.Conduit.Parallel.Internal.ParDuct
     import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
     import           UnliftIO

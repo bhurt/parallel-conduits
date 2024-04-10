@@ -20,7 +20,7 @@ module Data.Conduit.Parallel.Internal.Parallel (
     parallel
 ) where
 
-    import           Data.Conduit.Parallel.Internal.ParDuct
+    import           Data.Conduit.Parallel.Internal.Control
     import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Conduit.Parallel.Internal.Type
     import           UnliftIO

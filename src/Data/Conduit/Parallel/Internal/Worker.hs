@@ -1,10 +1,9 @@
-{-# LANGUAGE InstanceSigs        #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
--- Module      : Data.Conduit.Parallel.Internal.Utils
--- Description : General Utils
+-- Module      : Data.Conduit.Parallel.Internal.Worker
+-- Description : Worker thread utilities.
 -- Copyright   : (c) Brian Hurt, 2024
 -- License     : BSD 3-clause
 -- Maintainer  : bhurt42@gmail.com
@@ -18,7 +17,23 @@
 -- "Data.Conduit.Parallel" is for internal use only, and will change
 -- or disappear without notice.  Use at your own risk.
 --
-module Data.Conduit.Parallel.Internal.Utils (
+-- = Purpose
+--
+-- This module includes 
+-- This module wraps the various functions in 
+-- "Data.Conduit.Parallel.Internal.Duct" in such a way as they work with
+-- the greater ParConduit ecosystem.  This lets Ducts stay their own thing,
+-- and one day possibly be spun off into their own library.
+--
+-- You should import this module rather than Duct itself.
+--
+module Data.Conduit.Parallel.Internal.Worker(
+    Duct.Open(..),
+    Duct.ReadDuct,
+    Duct.WriteDuct,
+    Duct.Duct,
+    withReadDuct,
+    withWriteDuct,
     RecurM,
     runRecurM,
     Reader,
@@ -34,15 +49,19 @@ module Data.Conduit.Parallel.Internal.Utils (
     finalize
 ) where
 
+
     import           Control.Concurrent.STM
     import qualified Control.Exception                    as Ex
     import           Control.Monad.Cont
     import           Control.Monad.Trans.Maybe
+    import qualified Data.Conduit.Parallel.Internal.Duct  as Duct
     import           Data.Conduit.Parallel.Internal.Spawn
     import           Data.Sequence                        (Seq)
     import qualified Data.Sequence                        as Seq
     import           Data.Void
 
+    -- | Worker loop type.
+    --
     type RecurM a = MaybeT IO a
 
     type Reader a = RecurM a
@@ -61,6 +80,41 @@ module Data.Conduit.Parallel.Internal.Utils (
         where
             go :: (() -> IO r) -> IO r
             go f = Ex.finally (f ()) fini
+
+
+    -- | Allow reading from a ReadDuct.
+    --
+    -- Converts a ReadDuct into a function that reads values from that
+    -- read duct.  This function uses the standard Haskell with*
+    -- pattern for wrapping `Control.Exception.bracket`.  When the
+    -- wrapped computation exits (either via normal value return or
+    -- due to an exception), the open count of the read duct is
+    -- decremented.  If it drops to zero, then the read is closed.
+    -- 
+    withReadDuct :: forall a .  Duct.ReadDuct a -> Worker (Reader a)
+    withReadDuct rd = do
+        r :: IO (Maybe a) <- ContT $ Duct.withReadDuct rd Nothing
+        pure $ MaybeT r
+
+    -- | Allow writing to a WriteDuct.
+    --
+    -- Converts a WriteDuct into a function that writes values to that
+    -- write duct.  This function uses the standard Haskell with*
+    -- pattern for wrapping `Control.Exception.bracket`.  When the
+    -- wrapped computation exits (either via normal value return or
+    -- due to an exception), the open count of the write duct is
+    -- decremented.  If it drops to zero, then the duct is closed.
+    -- 
+    withWriteDuct :: forall a . Duct.WriteDuct a -> Worker (Writer a)
+    withWriteDuct wd = do
+        wio :: (a -> IO Duct.Open) <- ContT $ Duct.withWriteDuct wd Nothing
+        let wm :: a -> RecurM ()
+            wm a = MaybeT $ do
+                open <- wio a
+                case open of
+                    Duct.Open   -> pure $ Just ()
+                    Duct.Closed -> pure Nothing
+        pure wm
 
     data Cache a = Cache {
                         queue :: TVar (Seq a),

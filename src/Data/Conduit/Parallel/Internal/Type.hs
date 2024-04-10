@@ -31,8 +31,8 @@ module Data.Conduit.Parallel.Internal.Type (
     import           Control.Monad.Cont                     (ContT)
     import           Control.Monad.IO.Class
     import           Control.Monad.IO.Unlift                (MonadUnliftIO)
+    import           Data.Conduit.Parallel.Internal.Control as Duct
     import           Data.Conduit.Parallel.Internal.Copier  (copier)
-    import qualified Data.Conduit.Parallel.Internal.ParDuct as Duct
     import           Data.Conduit.Parallel.Internal.Spawn
     import qualified Data.Functor.Contravariant             as Contra
     import qualified Data.Profunctor                        as Pro

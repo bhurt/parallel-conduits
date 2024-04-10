@@ -37,18 +37,18 @@ library
                         , Data.Conduit.Parallel.Internal.Arrow
                         , Data.Conduit.Parallel.Internal.Cache
                         , Data.Conduit.Parallel.Internal.Circuit
+                        , Data.Conduit.Parallel.Internal.Control
                         , Data.Conduit.Parallel.Internal.Copier
                         , Data.Conduit.Parallel.Internal.Duct
                         , Data.Conduit.Parallel.Internal.Flip
                         , Data.Conduit.Parallel.Internal.LiftC
                         , Data.Conduit.Parallel.Internal.Parallel
                         , Data.Conduit.Parallel.Internal.ParallelA
-                        , Data.Conduit.Parallel.Internal.ParDuct
                         , Data.Conduit.Parallel.Internal.Run
                         , Data.Conduit.Parallel.Internal.Spawn
                         , Data.Conduit.Parallel.Internal.Tee
                         , Data.Conduit.Parallel.Internal.Type
-                        , Data.Conduit.Parallel.Internal.Utils
+                        , Data.Conduit.Parallel.Internal.Worker
   build-depends:       base >= 4.7 && < 5
                         , async
                         , conduit

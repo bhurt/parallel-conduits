@@ -21,9 +21,9 @@ module Data.Conduit.Parallel.Internal.ParallelA (
 ) where
 
     import           Data.Conduit.Parallel.Internal.Arrow
-    import           Data.Conduit.Parallel.Internal.ParDuct
+    import           Data.Conduit.Parallel.Internal.Control
     import           Data.Conduit.Parallel.Internal.Spawn
-    import           Data.Conduit.Parallel.Internal.Utils
+    import           Data.Conduit.Parallel.Internal.Worker
     import           Data.List.NonEmpty
     import           Data.Void
     import           UnliftIO
