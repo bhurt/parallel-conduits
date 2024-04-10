@@ -41,7 +41,6 @@ module Data.Conduit.Parallel.Internal.Arrow (
     import           Data.Conduit.Parallel.Internal.Worker
     import qualified Data.Functor.Contravariant             as Contra
     import qualified Data.Profunctor                        as Pro
-    import           Data.Void
     import           System.IO.Unsafe                       (unsafePerformIO)
     import           UnliftIO
 
@@ -84,9 +83,9 @@ module Data.Conduit.Parallel.Internal.Arrow (
                         -> WriteDuct i
                         -> Worker ()
             splitter que rdfi wdi = do
-                writeq :: Writer (f ()) <- withWriteQueue que
-                readfi :: Reader (f i)  <- withReadDuct rdfi
-                writei :: Writer i      <- withWriteDuct wdi
+                writeq :: Writer (f ()) <- openWriteQueue que
+                readfi :: Reader (f i)  <- openReadDuct rdfi
+                writei :: Writer i      <- openWriteDuct wdi
                 let recur :: LoopM Void
                     recur = do
                         fi :: f i <- readfi
@@ -100,9 +99,9 @@ module Data.Conduit.Parallel.Internal.Arrow (
                         -> WriteDuct (f o)
                         -> Worker ()
             fuser que rdo wdfo = do
-                readq   :: Reader (f ()) <- withReadQueue que
-                reado   :: Reader o      <- withReadDuct rdo
-                writefo :: Writer (f o)  <- withWriteDuct wdfo
+                readq   :: Reader (f ()) <- openReadQueue que
+                reado   :: Reader o      <- openReadDuct rdo
+                writefo :: Writer (f o)  <- openWriteDuct wdfo
                 let recur :: LoopM Void
                     recur = do
                         fu :: f () <- readq
@@ -145,10 +144,10 @@ module Data.Conduit.Parallel.Internal.Arrow (
                         -> WriteDuct i2
                         -> Worker ()
             splitter que rdfi wdi1 wdi2 = do
-                writeq  :: Writer (f () ()) <- withWriteQueue que
-                readfi  :: Reader (f i1 i2) <- withReadDuct rdfi
-                writei1 :: Writer i1        <- withWriteDuct wdi1
-                writei2 :: Writer i2        <- withWriteDuct wdi2
+                writeq  :: Writer (f () ()) <- openWriteQueue que
+                readfi  :: Reader (f i1 i2) <- openReadDuct rdfi
+                writei1 :: Writer i1        <- openWriteDuct wdi1
+                writei2 :: Writer i2        <- openWriteDuct wdi2
                 let recur :: LoopM Void
                     recur = do
                         fi :: f i1 i2 <- readfi
@@ -163,10 +162,10 @@ module Data.Conduit.Parallel.Internal.Arrow (
                         -> WriteDuct (f o1 o2)
                         -> Worker ()
             fuser que rdo1 rdo2 wdfo = do
-                readq   :: Reader (f () ()) <- withReadQueue que
-                reado1  :: Reader o1        <- withReadDuct rdo1
-                reado2  :: Reader o2        <- withReadDuct rdo2
-                writefo :: Writer (f o1 o2) <- withWriteDuct wdfo
+                readq   :: Reader (f () ()) <- openReadQueue que
+                reado1  :: Reader o1        <- openReadDuct rdo1
+                reado2  :: Reader o2        <- openReadDuct rdo2
+                writefo :: Writer (f o1 o2) <- openWriteDuct wdfo
                 let recur :: LoopM Void
                     recur = do
                         fu :: f () () <- readq
@@ -315,9 +314,9 @@ module Data.Conduit.Parallel.Internal.Arrow (
                             -> Queue i
                             -> Worker ()
                 shim1 rdi wdi quei = do
-                    writeq :: Writer i <- withWriteQueue quei
-                    readi  :: Reader i <- withReadDuct rdi
-                    writei :: Writer i <- withWriteDuct wdi
+                    writeq :: Writer i <- openWriteQueue quei
+                    readi  :: Reader i <- openReadDuct rdi
+                    writei :: Writer i <- openWriteDuct wdi
                     let recur :: LoopM Void
                         recur = do
                             i :: i <- readi
@@ -332,10 +331,10 @@ module Data.Conduit.Parallel.Internal.Arrow (
                             -> WriteDuct i
                             -> Worker ()
                 shim2 quei rde quee wdi = do
-                    readqi  :: Reader i            <- withReadQueue quei
-                    writeqe :: Writer (Either a b) <- withWriteQueue quee
-                    reade   :: Reader (Either a b) <- withReadDuct rde
-                    writei  :: Writer i            <- withWriteDuct wdi
+                    readqi  :: Reader i            <- openReadQueue quei
+                    writeqe :: Writer (Either a b) <- openWriteQueue quee
+                    reade   :: Reader (Either a b) <- openReadDuct rde
+                    writei  :: Writer i            <- openWriteDuct wdi
                     let recur :: LoopM Void
                         recur = do
                             e :: Either a b <- reade
@@ -352,9 +351,9 @@ module Data.Conduit.Parallel.Internal.Arrow (
                             -> WriteDuct b
                             -> Worker ()
                 shim3 rdf quee wdb = do
-                    readqe :: Reader (Either a b) <- withReadQueue quee
-                    readf  :: Reader (a -> b)     <- withReadDuct rdf
-                    writeb :: Writer b            <- withWriteDuct wdb
+                    readqe :: Reader (Either a b) <- openReadQueue quee
+                    readf  :: Reader (a -> b)     <- openReadDuct rdf
+                    writeb :: Writer b            <- openWriteDuct wdb
                     let recur :: LoopM Void
                         recur = do
                             e :: Either a b <- readqe
@@ -392,9 +391,9 @@ module Data.Conduit.Parallel.Internal.Arrow (
                             -> WriteDuct (b, d)
                             -> Worker ()
                 splitter que rdb wdbd = do
-                    writeq  :: Writer (IORef (Maybe d)) <- withWriteQueue que
-                    readb   :: Reader b                 <- withReadDuct rdb
-                    writebd :: Writer (b, d)            <- withWriteDuct wdbd
+                    writeq  :: Writer (IORef (Maybe d)) <- openWriteQueue que
+                    readb   :: Reader b                 <- openReadDuct rdb
+                    writebd :: Writer (b, d)            <- openWriteDuct wdbd
                     let recur :: LoopM Void
                         recur = do
                             b :: b <- readb
@@ -420,9 +419,9 @@ module Data.Conduit.Parallel.Internal.Arrow (
                         -> WriteDuct c
                         -> Worker ()
                 fuser que rdcd wdc = do
-                    readq  :: Reader (IORef (Maybe d)) <- withReadQueue que
-                    readcd :: Reader (c, d)            <- withReadDuct rdcd
-                    writec :: Writer c                 <- withWriteDuct wdc
+                    readq  :: Reader (IORef (Maybe d)) <- openReadQueue que
+                    readcd :: Reader (c, d)            <- openReadDuct rdcd
+                    writec :: Writer c                 <- openWriteDuct wdc
                     let recur :: LoopM Void
                         recur = do
                             ref :: IORef (Maybe d) <- readq

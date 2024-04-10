@@ -24,7 +24,6 @@ module Data.Conduit.Parallel.Internal.ParallelA (
     import           Data.Conduit.Parallel.Internal.Control
     import           Data.Conduit.Parallel.Internal.Worker
     import           Data.List.NonEmpty
-    import           Data.Void
     import           UnliftIO
 
 
@@ -75,8 +74,8 @@ module Data.Conduit.Parallel.Internal.ParallelA (
 
             splitter :: ReadDuct i -> NonEmpty (WriteDuct i) -> Worker ()
             splitter rdi wdis = do
-                readi :: Reader i            <- withReadDuct rdi
-                wis   :: NonEmpty (Writer i) <- traverse withWriteDuct wdis
+                readi :: Reader i            <- openReadDuct rdi
+                wis   :: NonEmpty (Writer i) <- traverse openWriteDuct wdis
                 let recur :: NonEmpty (Writer i) -> LoopM Void
                     recur ws = do
                         i <- readi
@@ -89,8 +88,8 @@ module Data.Conduit.Parallel.Internal.ParallelA (
 
             fuser :: WriteDuct o -> NonEmpty (ReadDuct o) -> Worker ()
             fuser wdo rdos = do
-                ros :: NonEmpty (Reader o) <- traverse withReadDuct rdos
-                wo  :: Writer o            <- withWriteDuct wdo
+                ros :: NonEmpty (Reader o) <- traverse openReadDuct rdos
+                wo  :: Writer o            <- openWriteDuct wdo
                 let recur :: NonEmpty (Reader o) -> LoopM Void
                     recur rs = do
                         let (ro, rs') = case rs of

@@ -39,27 +39,29 @@ module Data.Conduit.Parallel.Internal.Worker(
 
     -- * Ducts
     --
+    Reader,
+    Writer,
     Duct.ReadDuct,
     Duct.WriteDuct,
     Duct.Duct,
-    withReadDuct,
-    withWriteDuct,
-    Reader,
-    Writer,
+    openReadDuct,
+    openWriteDuct,
 
     -- * Unbounded Queues
     --
     Queue,
     makeQueue,
-    withReadQueue,
-    withWriteQueue,
+    openReadQueue,
+    openWriteQueue,
 
     -- * Bounded Queues
     BQueue,
     makeBQueue,
-    withReadBQueue,
-    withWriteBQueue
+    openReadBQueue,
+    openWriteBQueue,
 
+    -- * Convience
+    Void
 ) where
 
     import           Control.Concurrent.STM
@@ -85,12 +87,48 @@ module Data.Conduit.Parallel.Internal.Worker(
 
     -- | Worker loop type.
     --
+    -- The general pattern of worker threads is that they get the read
+    -- and write actions of some number of ducts or queues, then go into
+    -- a loop read and writing, until something closes.  At which point
+    -- they exit.
+    --
+    -- So worker threads start in the `Worker` monad, which is a 
+    -- ContT monad to handle the opening of ducts and queues.  It then
+    -- runs a MaybeT transformer handling all the pattern matching.
+    --
+    -- So a simple copy function might look like:
+    --
+    -- @
+    --      copyWorker :: ReadDuct a -> WriteDuct a -> Worker ()
+    --      copyWorker rd wd = do
+    --          read <- openReadDuct rd
+    --          write <- openWriteDuct wd
+    --          let loop :: LoopM Void
+    --              loop = do
+    --                  a <- read
+    --                  write a
+    --                  loop
+    --          in runLoopM loop
+    -- @
+    --
+    -- Note that loops return void- they do not exit until something closes
+    -- (returns Nothing).
+    --
     type LoopM a = MaybeT IO a
 
+    -- | Reader type.
+    --
+    -- Closures that produce (read) a value, either from a ReadDuct
+    -- for from the read end of a queue.
     type Reader a = LoopM a
 
+    -- | Writer type.
+    --
+    -- Closures that consume (write) a value, either to a WriteDuct
+    -- or to the write end of a queue.
     type Writer a = a -> LoopM ()
 
+    -- | Run a LoopM monad in a worker thread.
     runLoopM :: LoopM Void -> Worker ()
     runLoopM act = lift $ do
         r :: Maybe Void <- runMaybeT act
@@ -98,6 +136,7 @@ module Data.Conduit.Parallel.Internal.Worker(
             Nothing -> pure ()
             Just v  -> absurd v
 
+    -- | Ensure some action is executed on completion in a worker thread.
     finalize :: IO () -> Worker ()
     finalize fini = ContT go
         where
@@ -114,8 +153,8 @@ module Data.Conduit.Parallel.Internal.Worker(
     -- due to an exception), the open count of the read duct is
     -- decremented.  If it drops to zero, then the read is closed.
     -- 
-    withReadDuct :: forall a .  Duct.ReadDuct a -> Worker (Reader a)
-    withReadDuct rd = do
+    openReadDuct :: forall a .  Duct.ReadDuct a -> Worker (Reader a)
+    openReadDuct rd = do
         r :: IO (Maybe a) <- ContT $ Duct.withReadDuct rd Nothing
         pure $ MaybeT r
 
@@ -128,8 +167,8 @@ module Data.Conduit.Parallel.Internal.Worker(
     -- due to an exception), the open count of the write duct is
     -- decremented.  If it drops to zero, then the duct is closed.
     -- 
-    withWriteDuct :: forall a . Duct.WriteDuct a -> Worker (Writer a)
-    withWriteDuct wd = do
+    openWriteDuct :: forall a . Duct.WriteDuct a -> Worker (Writer a)
+    openWriteDuct wd = do
         wio :: (a -> IO Duct.Open) <- ContT $ Duct.withWriteDuct wd Nothing
         let wm :: a -> LoopM ()
             wm a = MaybeT $ do
@@ -139,14 +178,22 @@ module Data.Conduit.Parallel.Internal.Worker(
                     Duct.Closed -> pure Nothing
         pure wm
 
+    -- | The shared struture of Queues.
+    --
+    -- As we have two different types of queues (bounded and unbounded),
+    -- we want to factor out all the common code and types.
+    --
+    -- We'd like to call this a Queue, but, um, that name is already taken.
     data Cache a = Cache {
                         queue :: TVar (Seq a),
                         closed :: TVar Bool
                     }
 
+    -- | The shared queue creation function.
     makeCache :: forall a m r . MonadIO m => Control r m (Cache a)
     makeCache = liftIO $ Cache <$> newTVarIO Seq.empty <*> newTVarIO False
 
+    -- | The shared read end of a queue.
     makeCacheReader :: forall a .  Cache a -> Reader a
     makeCacheReader cache = MaybeT . atomically $ do
         sa :: Seq a <- readTVar (queue cache)
@@ -160,8 +207,13 @@ module Data.Conduit.Parallel.Internal.Worker(
                 then pure Nothing
                 else retry
 
+    -- | The shared write end of a queue.
     makeCacheWriter :: forall a .
                         (Seq a -> Bool)
+                        -- ^ Returns false if we should block (retry).
+                        --
+                        -- This is the one difference between bounded and
+                        -- unbounded queues.
                         -> Cache a
                         -> Writer a
     makeCacheWriter canWrite cache = \a -> MaybeT . atomically $ do
@@ -177,30 +229,33 @@ module Data.Conduit.Parallel.Internal.Worker(
             else
                 retry
 
-
+    -- | Shared queue close code.
     closeCache :: forall a .  Cache a -> IO ()
     closeCache cache = atomically $ writeTVar (closed cache) True
 
 
-    -- | Unbounded queues.
+    -- | Unbounded FIFO queues.
     --
     -- Used in Arrows, where the bounding is done by the ducts the
     -- Queues are bypassing.
     --
     newtype Queue a = Queue { getCache :: Cache a }
 
+    -- | Make an unbounded FIFO Queue.
     makeQueue :: forall m a x .
                     MonadIO m
                     => Control x m (Queue a)
     makeQueue = Queue <$> makeCache
 
-    withReadQueue :: forall a . Queue a -> Worker (Reader a)
-    withReadQueue que = do
+    -- | Open an unbounded FIFO Queue for reading.
+    openReadQueue :: forall a . Queue a -> Worker (Reader a)
+    openReadQueue que = do
         finalize (closeCache (getCache que))
         pure $ makeCacheReader (getCache que)
 
-    withWriteQueue :: forall a . Queue a -> Worker (Writer a)
-    withWriteQueue que = do
+    -- | Open an unbounded FIFO Queue for writing.
+    openWriteQueue :: forall a . Queue a -> Worker (Writer a)
+    openWriteQueue que = do
         finalize (closeCache (getCache que))
         pure $ makeCacheWriter (const True) (getCache que)
 
@@ -213,6 +268,7 @@ module Data.Conduit.Parallel.Internal.Worker(
                         maxLen :: Int
                     }
 
+    -- | Create a bounded FIFO Queue.
     makeBQueue :: forall m a x .  MonadIO m => Int -> Control x m (BQueue a)
     makeBQueue size 
         | size <= 0 = error "Non-positive size for makeBQueue"
@@ -220,13 +276,15 @@ module Data.Conduit.Parallel.Internal.Worker(
             c <- makeCache
             pure $ BQueue { getBCache = c, maxLen = size }
 
-    withReadBQueue :: forall a .  BQueue a -> Worker (Reader a)
-    withReadBQueue bque = do
+    -- | Open a bounded FIFO Queue for reading.
+    openReadBQueue :: forall a .  BQueue a -> Worker (Reader a)
+    openReadBQueue bque = do
         finalize (closeCache (getBCache bque))
         pure $ makeCacheReader (getBCache bque)
 
-    withWriteBQueue :: forall a .  BQueue a -> Worker (Writer a)
-    withWriteBQueue bque = do
+    -- | Open a bounded FIFO Queue for writing.
+    openWriteBQueue :: forall a .  BQueue a -> Worker (Writer a)
+    openWriteBQueue bque = do
         finalize (closeCache (getBCache bque))
         pure $ makeCacheWriter
                 (\s -> Seq.length s < maxLen bque)

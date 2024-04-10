@@ -25,7 +25,6 @@ module Data.Conduit.Parallel.Internal.Cache (
     import           Data.Conduit.Parallel.Internal.Control
     import           Data.Conduit.Parallel.Internal.Type
     import           Data.Conduit.Parallel.Internal.Worker
-    import           Data.Void
     import           UnliftIO
 
     cacher :: forall m i x .
@@ -42,8 +41,8 @@ module Data.Conduit.Parallel.Internal.Cache (
         where
             loader :: BQueue i -> Worker ()
             loader que = do
-                readi  :: Reader i <- withReadDuct rd
-                writeq :: Writer i <- withWriteBQueue que
+                readi  :: Reader i <- openReadDuct rd
+                writeq :: Writer i <- openWriteBQueue que
                 let recur :: LoopM Void
                     recur = do
                         i <- readi
@@ -53,8 +52,8 @@ module Data.Conduit.Parallel.Internal.Cache (
 
             unloader :: BQueue i -> Worker ()
             unloader que = do
-                readq  :: Reader i <- withReadBQueue que
-                writei :: Writer i <- withWriteDuct wd
+                readq  :: Reader i <- openReadBQueue que
+                writei :: Writer i <- openWriteDuct wd
                 let recur :: LoopM Void
                     recur = do
                         i <- readq

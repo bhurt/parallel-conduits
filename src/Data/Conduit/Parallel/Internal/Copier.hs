@@ -27,15 +27,14 @@ module Data.Conduit.Parallel.Internal.Copier (
     import           Data.Bitraversable
     import           Data.Conduit.Parallel.Internal.Worker
     import           Data.Foldable                         (traverse_)
-    import           Data.Void
 
     copier :: forall a .
                 ReadDuct a
                 -> WriteDuct a
                 -> Worker ()
     copier src snk = do
-        reada :: Reader a <- withReadDuct src
-        writea :: Writer a <- withWriteDuct snk
+        reada :: Reader a <- openReadDuct src
+        writea :: Writer a <- openWriteDuct snk
         let recur :: LoopM Void
             recur = do
                 a <- reada
@@ -50,9 +49,9 @@ module Data.Conduit.Parallel.Internal.Copier (
                 -> WriteDuct b
                 -> Worker ()
     direct rdf wda wdb = do
-        readf  :: Reader (f a b) <- withReadDuct rdf
-        writea :: Writer a       <- withWriteDuct wda
-        writeb :: Writer b       <- withWriteDuct wdb
+        readf  :: Reader (f a b) <- openReadDuct rdf
+        writea :: Writer a       <- openWriteDuct wda
+        writeb :: Writer b       <- openWriteDuct wdb
         let recur :: LoopM Void
             recur = do
                 f :: f a b <- readf
@@ -66,8 +65,8 @@ module Data.Conduit.Parallel.Internal.Copier (
                     -> f (WriteDuct a)
                     -> Worker ()
     duplicator rda fwda = do
-        reada   :: Reader a     <- withReadDuct rda
-        writesf :: f (Writer a) <- traverse withWriteDuct fwda
+        reada   :: Reader a     <- openReadDuct rda
+        writesf :: f (Writer a) <- traverse openWriteDuct fwda
         let recur :: LoopM Void
             recur = do
                 a :: a <- reada
@@ -81,8 +80,8 @@ module Data.Conduit.Parallel.Internal.Copier (
                     -> WriteDuct a
                     -> Worker ()
     traverser rdf wda = do
-        readfa :: Reader (f a) <- withReadDuct rdf
-        writea :: Writer a     <- withWriteDuct wda
+        readfa :: Reader (f a) <- openReadDuct rdf
+        writea :: Writer a     <- openWriteDuct wda
         let recur :: LoopM Void
             recur = do
                 f :: f a <- readfa
